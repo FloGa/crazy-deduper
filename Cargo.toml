@@ -1,0 +1,14 @@
+[package]
+name = "crazy-deduper"
+version = "0.1.0-SNAPSHOT"
+edition = "2021"
+
+authors = ["Florian Gamböck <mail@floga.de>"]
+description = "Unconventional deduping method."
+repository = "https://github.com/FloGa/crazy-deduper.git"
+readme = "README.md"
+categories = []
+keywords = []
+license = "MIT"
+
+[dependencies]
