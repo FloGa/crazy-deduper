@@ -1,3 +1,4 @@
+use std::error::Error;
 use std::fs::File;
 use std::io::{BufReader, BufWriter, Read, Write};
 use std::path::PathBuf;
@@ -20,7 +21,7 @@ struct Cli {
     decode: bool,
 }
 
-fn ensure_init(base: &PathBuf) {
+fn ensure_init(base: &PathBuf) -> Result<(), Box<dyn Error>> {
     if base.exists() {
         panic!("'{}' already exists!", base.display());
     }
@@ -29,9 +30,11 @@ fn ensure_init(base: &PathBuf) {
     std::fs::create_dir(base.join("config")).unwrap();
     std::fs::create_dir(base.join("data")).unwrap();
     std::fs::create_dir(base.join("tree")).unwrap();
+
+    Ok(())
 }
 
-fn check_init(base: &PathBuf) {
+fn check_init(base: &PathBuf)  -> Result<(), Box<dyn Error>>{
     let all_exist = base.exists()
         && base.join("config").exists()
         && base.join("data").exists()
@@ -40,9 +43,11 @@ fn check_init(base: &PathBuf) {
     if !all_exist {
         panic!("'{}' not properly initialized!", base.display());
     }
+    
+    Ok(())
 }
 
-fn populate(source: &PathBuf, target: &PathBuf) {
+fn populate(source: &PathBuf, target: &PathBuf) -> Result<(), Box<dyn Error>> {
     for source_entry in WalkDir::new(source) {
         let source_entry = source_entry.unwrap();
 
@@ -94,9 +99,11 @@ fn populate(source: &PathBuf, target: &PathBuf) {
             std::fs::write(&target_path, contents).unwrap();
         }
     }
+
+    Ok(())
 }
 
-fn hydrate(source: &PathBuf, target: &PathBuf) {
+fn hydrate(source: &PathBuf, target: &PathBuf) -> Result<(), Box<dyn Error>> {
     if target.exists() {
         panic!("'{}' already exists!", target.display());
     }
@@ -143,21 +150,25 @@ fn hydrate(source: &PathBuf, target: &PathBuf) {
             }
         }
     }
+
+    Ok(())
 }
 
-fn main() {
+fn main() -> Result<(), Box<dyn Error>> {
     let args = Cli::parse();
 
     let source = args.source;
     let target = args.target;
 
     if !args.decode {
-        ensure_init(&target);
-        populate(&source, &target);
+        ensure_init(&target).unwrap();
+        populate(&source, &target).unwrap();
     } else {
-        check_init(&source);
-        hydrate(&source, &target);
+        check_init(&source).unwrap();
+        hydrate(&source, &target).unwrap();
     }
+
+    Ok(())
 }
 
 #[cfg(test)]
