@@ -2,8 +2,23 @@ use std::fs::File;
 use std::io::{BufReader, BufWriter, Read, Write};
 use std::path::PathBuf;
 
+use clap::Parser;
 use sha2::{Digest, Sha256};
 use walkdir::WalkDir;
+
+#[derive(Parser, Debug)]
+#[command(author, version, about, long_about = None)]
+struct Cli {
+    /// Source directory
+    source: PathBuf,
+
+    /// Target directory
+    target: PathBuf,
+
+    /// Invert behavior, restore tree from deduplicated data
+    #[arg(long, short, visible_alias = "hydrate")]
+    decode: bool,
+}
 
 fn ensure_init(base: &PathBuf) {
     if base.exists() {
@@ -130,11 +145,12 @@ fn hydrate(source: &PathBuf, target: &PathBuf) {
 }
 
 fn main() {
-    let source = PathBuf::from(std::env::args_os().nth(1).unwrap());
-    let target = PathBuf::from(std::env::args_os().nth(2).unwrap());
-    let should_hydrate = std::env::args_os().nth(3).map_or(false, |arg| arg == "-d");
+    let args = Cli::parse();
 
-    if !should_hydrate {
+    let source = args.source;
+    let target = args.target;
+
+    if !args.decode {
         ensure_init(&target);
         populate(&source, &target);
     } else {
