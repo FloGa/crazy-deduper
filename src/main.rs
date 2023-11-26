@@ -62,34 +62,35 @@ fn populate(source: &PathBuf, target: &PathBuf) {
         if metadata.is_dir() {
             std::fs::create_dir(target_path).unwrap();
         } else if metadata.is_file() {
-            let input = BufReader::new(File::open(source_entry.path()).unwrap());
-            let mut hashes = Vec::new();
-            let mut bytes = input.bytes();
-            loop {
-                let chunk = bytes
-                    .by_ref()
-                    .take(1024 * 1024)
-                    .flatten()
-                    .collect::<Vec<_>>();
-                if chunk.is_empty() {
-                    break;
-                }
-                let mut hasher = Sha256::new();
-                hasher.update(&chunk);
-                let hash = hasher.finalize();
-                let hash = base16ct::lower::encode_string(&hash);
-                std::fs::write(target.join("data").join(&hash), &chunk).unwrap();
-                hashes.push(hash);
-                if chunk.len() != 1024 * 1024 {
-                    break;
-                }
-            }
-            let contents = hashes.join("\n").into_bytes();
-            let contents = if contents.is_empty() {
-                contents
+            let size = metadata.len();
+            let contents = if size == 0 {
+                Vec::new()
             } else {
-                zstd::bulk::compress(&contents, 0).unwrap()
+                let mut hashes = Vec::new();
+                let input = BufReader::new(File::open(source_entry.path()).unwrap());
+                let mut bytes = input.bytes();
+
+                // Process file in MiB chunks.
+                for _ in (0..).take_while(|i| i * 1024 * 1024 < size) {
+                    let chunk = bytes
+                        .by_ref()
+                        .take(1024 * 1024)
+                        .flatten()
+                        .collect::<Vec<_>>();
+
+                    let mut hasher = Sha256::new();
+                    hasher.update(&chunk);
+                    let hash = hasher.finalize();
+                    let hash = base16ct::lower::encode_string(&hash);
+
+                    std::fs::write(target.join("data").join(&hash), &chunk).unwrap();
+                    hashes.push(hash);
+                }
+
+                // Return compressed list of newline separated hashes.
+                zstd::bulk::compress(&hashes.join("\n").into_bytes(), 0).unwrap()
             };
+
             std::fs::write(&target_path, contents).unwrap();
         }
     }
