@@ -16,3 +16,10 @@ base16ct = { version = "0.2.0",features = ["alloc"] }
 sha2 = "0.10.8"
 walkdir = "2.4.0"
 zstd = "0.13.0"
+
+[dev-dependencies]
+assert_cmd = "2.0.12"
+assert_fs = "1.0.13"
+dir-diff = "0.3.2"
+lazy_static = "1.4.0"
+predicates = "3.0.4"
