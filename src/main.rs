@@ -7,6 +7,8 @@ use clap::Parser;
 use sha2::{Digest, Sha256};
 use walkdir::WalkDir;
 
+type Result = std::result::Result<(), Box<dyn Error>>;
+
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Cli {
@@ -21,7 +23,7 @@ struct Cli {
     decode: bool,
 }
 
-fn ensure_init(base: &PathBuf) -> Result<(), Box<dyn Error>> {
+fn ensure_init(base: &PathBuf) -> Result {
     if base.exists() {
         panic!("'{}' already exists!", base.display());
     }
@@ -34,7 +36,7 @@ fn ensure_init(base: &PathBuf) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-fn check_init(base: &PathBuf)  -> Result<(), Box<dyn Error>>{
+fn check_init(base: &PathBuf) -> Result {
     let all_exist = base.exists()
         && base.join("config").exists()
         && base.join("data").exists()
@@ -47,7 +49,7 @@ fn check_init(base: &PathBuf)  -> Result<(), Box<dyn Error>>{
     Ok(())
 }
 
-fn populate(source: &PathBuf, target: &PathBuf) -> Result<(), Box<dyn Error>> {
+fn populate(source: &PathBuf, target: &PathBuf) -> Result {
     for source_entry in WalkDir::new(source) {
         let source_entry = source_entry.unwrap();
 
@@ -103,7 +105,7 @@ fn populate(source: &PathBuf, target: &PathBuf) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-fn hydrate(source: &PathBuf, target: &PathBuf) -> Result<(), Box<dyn Error>> {
+fn hydrate(source: &PathBuf, target: &PathBuf) -> Result {
     if target.exists() {
         panic!("'{}' already exists!", target.display());
     }
@@ -154,7 +156,7 @@ fn hydrate(source: &PathBuf, target: &PathBuf) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-fn main() -> Result<(), Box<dyn Error>> {
+fn main() -> Result {
     let args = Cli::parse();
 
     let source = args.source;
