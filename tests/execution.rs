@@ -1,6 +1,6 @@
-use std::error::Error;
 use std::fs;
 
+use anyhow::Result;
 use assert_cmd::Command;
 use assert_fs::fixture::ChildPath;
 use assert_fs::prelude::*;
@@ -8,12 +8,10 @@ use assert_fs::TempDir;
 
 mod common;
 
-type Result = std::result::Result<(), Box<dyn Error>>;
-
 fn fixture(
-    setup_origin: fn(&ChildPath) -> Result,
-    check_dedup: fn(&ChildPath) -> Result,
-) -> Result {
+    setup_origin: fn(&ChildPath) -> Result<()>,
+    check_dedup: fn(&ChildPath) -> Result<()>,
+) -> Result<()> {
     let temp = TempDir::new()?;
 
     let path_dedup = temp.child("dedup");
@@ -46,12 +44,12 @@ fn fixture(
 }
 
 #[test]
-fn empty_dir() -> Result {
-    fn setup_origin(_path_origin: &ChildPath) -> Result {
+fn empty_dir() -> Result<()> {
+    fn setup_origin(_path_origin: &ChildPath) -> Result<()> {
         Ok(())
     }
 
-    fn check_dedup(path_dedup: &ChildPath) -> Result {
+    fn check_dedup(path_dedup: &ChildPath) -> Result<()> {
         assert_eq!(fs::read_dir(path_dedup.child("data"))?.count(), 0);
         assert_eq!(fs::read_dir(path_dedup.child("tree"))?.count(), 0);
         Ok(())
@@ -63,14 +61,14 @@ fn empty_dir() -> Result {
 }
 
 #[test]
-fn empty_subdirs() -> Result {
-    fn setup_origin(path_origin: &ChildPath) -> Result {
+fn empty_subdirs() -> Result<()> {
+    fn setup_origin(path_origin: &ChildPath) -> Result<()> {
         path_origin.child("subdir1").create_dir_all()?;
         path_origin.child("subdir2").create_dir_all()?;
         Ok(())
     }
 
-    fn check_dedup(path_dedup: &ChildPath) -> Result {
+    fn check_dedup(path_dedup: &ChildPath) -> Result<()> {
         assert_eq!(fs::read_dir(path_dedup.child("data"))?.count(), 0);
         assert_eq!(fs::read_dir(path_dedup.child("tree"))?.count(), 2);
         Ok(())
@@ -82,8 +80,8 @@ fn empty_subdirs() -> Result {
 }
 
 #[test]
-fn small_files() -> Result {
-    fn setup_origin(path_origin: &ChildPath) -> Result {
+fn small_files() -> Result<()> {
+    fn setup_origin(path_origin: &ChildPath) -> Result<()> {
         for subdir in 0..=1 {
             let subdir = path_origin.child(format!("subdir-{subdir}"));
             subdir.create_dir_all()?;
@@ -98,7 +96,7 @@ fn small_files() -> Result {
         Ok(())
     }
 
-    fn check_dedup(path_dedup: &ChildPath) -> Result {
+    fn check_dedup(path_dedup: &ChildPath) -> Result<()> {
         // Each 2 of the 10 files are identical, so there are 5 deduplicated data blocks.
         assert_eq!(fs::read_dir(path_dedup.child("data"))?.count(), 5);
         assert_eq!(fs::read_dir(path_dedup.child("tree"))?.count(), 2);
@@ -120,8 +118,8 @@ fn small_files() -> Result {
 }
 
 #[test]
-fn big_files() -> Result {
-    fn setup_origin(path_origin: &ChildPath) -> Result {
+fn big_files() -> Result<()> {
+    fn setup_origin(path_origin: &ChildPath) -> Result<()> {
         let mut bytes = (0..u8::MAX).cycle();
         for file in 0..=1 {
             fs::write(
@@ -135,7 +133,7 @@ fn big_files() -> Result {
         Ok(())
     }
 
-    fn check_dedup(path_dedup: &ChildPath) -> Result {
+    fn check_dedup(path_dedup: &ChildPath) -> Result<()> {
         // Each of the 2 files have 2 data blocks. File-9 is completely deduplicated.
         assert_eq!(fs::read_dir(path_dedup.child("data"))?.count(), 4);
         assert_eq!(fs::read_dir(path_dedup.child("tree"))?.count(), 3);
@@ -149,8 +147,8 @@ fn big_files() -> Result {
 }
 
 #[test]
-fn exact_1mb_files() -> Result {
-    fn setup_origin(path_origin: &ChildPath) -> Result {
+fn exact_1mb_files() -> Result<()> {
+    fn setup_origin(path_origin: &ChildPath) -> Result<()> {
         let mut bytes = (0..u8::MAX).cycle();
         for file in 0..=1 {
             fs::write(
@@ -164,7 +162,7 @@ fn exact_1mb_files() -> Result {
         Ok(())
     }
 
-    fn check_dedup(path_dedup: &ChildPath) -> Result {
+    fn check_dedup(path_dedup: &ChildPath) -> Result<()> {
         // Each of the 2 files have exactly 1 data block. File-9 is completely deduplicated.
         assert_eq!(fs::read_dir(path_dedup.child("data"))?.count(), 2);
         assert_eq!(fs::read_dir(path_dedup.child("tree"))?.count(), 3);
