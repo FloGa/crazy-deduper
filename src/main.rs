@@ -1,13 +1,11 @@
-use std::error::Error;
 use std::fs::File;
 use std::io::{BufReader, BufWriter, Read, Write};
 use std::path::PathBuf;
 
+use anyhow::{bail, Result};
 use clap::Parser;
 use sha2::{Digest, Sha256};
 use walkdir::WalkDir;
-
-type Result = std::result::Result<(), Box<dyn Error>>;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -23,35 +21,35 @@ struct Cli {
     decode: bool,
 }
 
-fn ensure_init(base: &PathBuf) -> Result {
+fn ensure_init(base: &PathBuf) -> Result<()> {
     if base.exists() {
-        panic!("'{}' already exists!", base.display());
+        bail!("'{}' already exists!", base.display());
     }
 
-    std::fs::create_dir(base).unwrap();
-    std::fs::create_dir(base.join("config")).unwrap();
-    std::fs::create_dir(base.join("data")).unwrap();
-    std::fs::create_dir(base.join("tree")).unwrap();
+    std::fs::create_dir(base)?;
+    std::fs::create_dir(base.join("config"))?;
+    std::fs::create_dir(base.join("data"))?;
+    std::fs::create_dir(base.join("tree"))?;
 
     Ok(())
 }
 
-fn check_init(base: &PathBuf) -> Result {
+fn check_init(base: &PathBuf) -> Result<()> {
     let all_exist = base.exists()
         && base.join("config").exists()
         && base.join("data").exists()
         && base.join("tree").exists();
 
     if !all_exist {
-        panic!("'{}' not properly initialized!", base.display());
+        bail!("'{}' not properly initialized!", base.display());
     }
-    
+
     Ok(())
 }
 
-fn populate(source: &PathBuf, target: &PathBuf) -> Result {
+fn populate(source: &PathBuf, target: &PathBuf) -> Result<()> {
     for source_entry in WalkDir::new(source) {
-        let source_entry = source_entry.unwrap();
+        let source_entry = source_entry?;
 
         if source_entry.depth() == 0 {
             continue;
@@ -65,16 +63,16 @@ fn populate(source: &PathBuf, target: &PathBuf) -> Result {
                 .collect::<PathBuf>(),
         );
 
-        let metadata = source_entry.metadata().unwrap();
+        let metadata = source_entry.metadata()?;
         if metadata.is_dir() {
-            std::fs::create_dir(target_path).unwrap();
+            std::fs::create_dir(target_path)?;
         } else if metadata.is_file() {
             let size = metadata.len();
             let contents = if size == 0 {
                 Vec::new()
             } else {
                 let mut hashes = Vec::new();
-                let input = BufReader::new(File::open(source_entry.path()).unwrap());
+                let input = BufReader::new(File::open(source_entry.path())?);
                 let mut bytes = input.bytes();
 
                 // Process file in MiB chunks.
@@ -90,30 +88,30 @@ fn populate(source: &PathBuf, target: &PathBuf) -> Result {
                     let hash = hasher.finalize();
                     let hash = base16ct::lower::encode_string(&hash);
 
-                    std::fs::write(target.join("data").join(&hash), &chunk).unwrap();
+                    std::fs::write(target.join("data").join(&hash), &chunk)?;
                     hashes.push(hash);
                 }
 
                 // Return compressed list of newline separated hashes.
-                zstd::bulk::compress(&hashes.join("\n").into_bytes(), 0).unwrap()
+                zstd::bulk::compress(&hashes.join("\n").into_bytes(), 0)?
             };
 
-            std::fs::write(&target_path, contents).unwrap();
+            std::fs::write(&target_path, contents)?;
         }
     }
 
     Ok(())
 }
 
-fn hydrate(source: &PathBuf, target: &PathBuf) -> Result {
+fn hydrate(source: &PathBuf, target: &PathBuf) -> Result<()> {
     if target.exists() {
-        panic!("'{}' already exists!", target.display());
+        bail!("'{}' already exists!", target.display());
     }
 
-    std::fs::create_dir(target).unwrap();
+    std::fs::create_dir(target)?;
 
     for source_entry in WalkDir::new(source.join("tree")) {
-        let source_entry = source_entry.unwrap();
+        let source_entry = source_entry?;
 
         if source_entry.depth() == 0 {
             continue;
@@ -127,27 +125,26 @@ fn hydrate(source: &PathBuf, target: &PathBuf) -> Result {
                 .collect::<PathBuf>(),
         );
 
-        let metadata = source_entry.metadata().unwrap();
+        let metadata = source_entry.metadata()?;
         if metadata.is_dir() {
-            std::fs::create_dir(target_path).unwrap();
+            std::fs::create_dir(target_path)?;
         } else if metadata.is_file() {
             let contents = if metadata.len() > 0 {
-                let input = File::open(source_entry.path()).unwrap();
-                zstd::stream::decode_all(input).unwrap()
+                let input = File::open(source_entry.path())?;
+                zstd::stream::decode_all(input)?
             } else {
                 Vec::new()
             };
 
-            let mut out = BufWriter::new(File::create(&target_path).unwrap());
+            let mut out = BufWriter::new(File::create(&target_path)?);
             if metadata.len() > 0 {
-                for hash in String::from_utf8(contents).unwrap().split("\n") {
+                for hash in String::from_utf8(contents)?.split("\n") {
                     out.write_all(
-                        &BufReader::new(File::open(source.join("data").join(hash)).unwrap())
+                        &BufReader::new(File::open(source.join("data").join(hash))?)
                             .bytes()
                             .flatten()
                             .collect::<Vec<_>>(),
-                    )
-                    .unwrap();
+                    )?;
                 }
             }
         }
@@ -156,18 +153,18 @@ fn hydrate(source: &PathBuf, target: &PathBuf) -> Result {
     Ok(())
 }
 
-fn main() -> Result {
+fn main() -> Result<()> {
     let args = Cli::parse();
 
     let source = args.source;
     let target = args.target;
 
     if !args.decode {
-        ensure_init(&target).unwrap();
-        populate(&source, &target).unwrap();
+        ensure_init(&target)?;
+        populate(&source, &target)?;
     } else {
-        check_init(&source).unwrap();
-        hydrate(&source, &target).unwrap();
+        check_init(&source)?;
+        hydrate(&source, &target)?;
     }
 
     Ok(())
