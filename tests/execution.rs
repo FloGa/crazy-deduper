@@ -6,6 +6,8 @@ use assert_fs::fixture::ChildPath;
 use assert_fs::prelude::*;
 use assert_fs::TempDir;
 
+use crazy_deduper::ensure_init;
+
 mod common;
 
 fn fixture(
@@ -171,6 +173,46 @@ fn exact_1mb_files() -> Result<()> {
     }
 
     fixture(setup_origin, check_dedup)?;
+
+    Ok(())
+}
+
+#[test]
+fn dirs_already_exist() -> Result<()> {
+    let temp = TempDir::new()?;
+    let source = temp.child("source");
+    source.create_dir_all()?;
+    let target = temp.child("target");
+    ensure_init(&target.to_path_buf())?;
+
+    Command::new(&*common::BIN_PATH)
+        .arg(source.path())
+        .arg(target.path())
+        .assert()
+        .failure();
+
+    Command::new(&*common::BIN_PATH)
+        .arg(target.path())
+        .arg(source.path())
+        .arg("-d")
+        .assert()
+        .failure();
+
+    Ok(())
+}
+
+#[test]
+fn dir_not_initialized() -> Result<()> {
+    let temp = TempDir::new()?;
+    let source = temp.child("source");
+    let target = temp.child("target");
+
+    Command::new(&*common::BIN_PATH)
+        .arg(target.path())
+        .arg(source.path())
+        .arg("-d")
+        .assert()
+        .failure();
 
     Ok(())
 }
