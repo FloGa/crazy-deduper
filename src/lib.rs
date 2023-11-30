@@ -2,13 +2,33 @@ use std::fs::File;
 use std::io::{BufReader, BufWriter, Read, Write};
 use std::path::PathBuf;
 
-use anyhow::{bail, Result};
 use sha2::{Digest, Sha256};
+use thiserror::Error;
 use walkdir::WalkDir;
+
+#[derive(Debug, Error)]
+pub enum Error {
+    #[error("'{0}' already exists!")]
+    AlreadyExists(PathBuf),
+
+    #[error("'{0}' not properly initialized")]
+    NotInitialized(PathBuf),
+
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+
+    #[error(transparent)]
+    Walkdir(#[from] walkdir::Error),
+
+    #[error(transparent)]
+    Utf8(#[from] std::string::FromUtf8Error),
+}
+
+type Result<R> = std::result::Result<R, Error>;
 
 pub fn ensure_init(base: &PathBuf) -> Result<()> {
     if base.exists() {
-        bail!("'{}' already exists!", base.display());
+        return Err(Error::AlreadyExists(base.to_path_buf()));
     }
 
     std::fs::create_dir(base)?;
@@ -26,7 +46,7 @@ pub fn check_init(base: &PathBuf) -> Result<()> {
         && base.join("tree").exists();
 
     if !all_exist {
-        bail!("'{}' not properly initialized!", base.display());
+        return Err(Error::NotInitialized(base.to_path_buf()));
     }
 
     Ok(())
@@ -90,7 +110,7 @@ pub fn populate(source: &PathBuf, target: &PathBuf) -> Result<()> {
 
 pub fn hydrate(source: &PathBuf, target: &PathBuf) -> Result<()> {
     if target.exists() {
-        bail!("'{}' already exists!", target.display());
+        return Err(Error::AlreadyExists(target.to_path_buf()));
     }
 
     std::fs::create_dir(target)?;
