@@ -246,3 +246,47 @@ pub fn hydrate(source: &PathBuf, target: &PathBuf) -> Result<()> {
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use anyhow::Result;
+    use assert_fs::prelude::*;
+    use assert_fs::TempDir;
+
+    use super::*;
+
+    #[test]
+    fn small_files() -> Result<()> {
+        let temp = TempDir::new()?;
+        let source = temp.child("source");
+        source.create_dir_all()?;
+
+        let file_1 = source.child("file-1");
+        let file_2 = source.child("file-2");
+        let file_3 = source.child("file-3");
+
+        std::fs::write(&file_1, "content")?;
+        std::fs::write(&file_2, "content")?;
+        std::fs::write(&file_3, "another content")?;
+
+        let dedup_1 = DedupFile::new(file_1.to_path_buf())?;
+        let dedup_2 = DedupFile::new(file_2.to_path_buf())?;
+        let dedup_3 = DedupFile::new(file_3.to_path_buf())?;
+
+        assert_eq!(dedup_1.chunks.len(), 1);
+        assert_eq!(dedup_2.chunks.len(), 1);
+        assert_eq!(dedup_3.chunks.len(), 1);
+
+        assert_eq!(
+            dedup_1.chunks.get(0).unwrap().hash,
+            dedup_2.chunks.get(0).unwrap().hash
+        );
+
+        assert_ne!(
+            dedup_1.chunks.get(0).unwrap().hash,
+            dedup_3.chunks.get(0).unwrap().hash
+        );
+
+        Ok(())
+    }
+}

@@ -1,0 +1,28 @@
+use anyhow::Result;
+use assert_fs::prelude::*;
+use assert_fs::TempDir;
+
+use crazy_deduper::DedupFile;
+
+#[test]
+fn check_public_properties() -> Result<()> {
+    let temp = TempDir::new()?;
+    let source = temp.child("source");
+    source.create_dir_all()?;
+
+    let file = source.child("file");
+    std::fs::write(&file, "content")?;
+
+    let dedup_file = DedupFile::new(file.to_path_buf())?;
+    assert_eq!(dedup_file.path, file.to_path_buf());
+
+    let chunks = dedup_file.chunks;
+    assert_eq!(chunks.len(), 1);
+
+    let chunk = chunks.get(0).unwrap();
+    assert_eq!(chunk.offset, 0);
+    assert_ne!(chunk.size, 0);
+    assert_ne!(chunk.hash, "");
+
+    Ok(())
+}
