@@ -209,12 +209,8 @@ impl DedupItem {
 }
 
 pub fn populate(source: &PathBuf, target: &PathBuf) -> Result<()> {
-    for source_entry in WalkDir::new(source) {
+    for source_entry in WalkDir::new(source).min_depth(1) {
         let source_entry = source_entry?;
-
-        if source_entry.depth() == 0 {
-            continue;
-        }
 
         let args = DedupItemArgs::new_with_base_paths(
             source_entry.into_path(),
