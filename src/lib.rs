@@ -52,6 +52,104 @@ pub fn check_init(base: &PathBuf) -> Result<()> {
     Ok(())
 }
 
+pub struct DedupFileChunk {
+    pub offset: u64,
+    pub size: usize,
+    pub hash: String,
+}
+
+pub struct DedupFile {
+    pub path: PathBuf,
+    pub chunks: Vec<DedupFileChunk>,
+}
+
+impl DedupFile {
+    fn new_impl(path: PathBuf, target: Option<PathBuf>) -> Result<Self> {
+        let mut chunks = Vec::new();
+
+        let size = path.metadata()?.len();
+        let input = BufReader::new(File::open(&path)?);
+        let mut bytes = input.bytes();
+
+        // Process file in MiB chunks.
+        for i in (0..).take_while(|i| i * 1024 * 1024 < size) {
+            let chunk = bytes
+                .by_ref()
+                .take(1024 * 1024)
+                .flatten()
+                .collect::<Vec<_>>();
+
+            let mut hasher = Sha256::new();
+            hasher.update(&chunk);
+            let hash = hasher.finalize();
+            let hash = base16ct::lower::encode_string(&hash);
+
+            if let Some(target) = &target {
+                std::fs::write(target.join("data").join(&hash), &chunk)?;
+            }
+
+            let dedup_chunk = DedupFileChunk {
+                offset: i * 1024 * 1024,
+                size: chunk.len(),
+                hash,
+            };
+
+            chunks.push(dedup_chunk);
+        }
+
+        Ok(Self { path, chunks })
+    }
+
+    pub fn new(path: PathBuf) -> Result<Self> {
+        Self::new_impl(path, None)
+    }
+
+    pub fn new_with_target(path: PathBuf, target: PathBuf) -> Result<Self> {
+        Self::new_impl(path, Some(target))
+    }
+}
+
+pub enum DedupItem {
+    Dir(PathBuf),
+    File(DedupFile),
+    Unsupported(PathBuf),
+}
+
+pub struct DedupItemBuilder {
+    source: PathBuf,
+    target: Option<PathBuf>,
+}
+
+impl DedupItemBuilder {
+    pub fn new(source: PathBuf) -> Self {
+        Self {
+            source,
+            target: None,
+        }
+    }
+
+    pub fn with_target(mut self, target: PathBuf) -> Self {
+        self.target = Some(target);
+        self
+    }
+
+    pub fn build(self) -> Result<DedupItem> {
+        let path = self.source;
+
+        let metadata = path.metadata()?.file_type();
+
+        if metadata.is_dir() {
+            return Ok(DedupItem::Dir(path));
+        }
+
+        if !metadata.is_file() {
+            return Ok(DedupItem::Unsupported(path));
+        }
+
+        DedupFile::new_impl(path, self.target).map(|f| DedupItem::File(f))
+    }
+}
+
 pub fn populate(source: &PathBuf, target: &PathBuf) -> Result<()> {
     for source_entry in WalkDir::new(source) {
         let source_entry = source_entry?;
@@ -68,40 +166,31 @@ pub fn populate(source: &PathBuf, target: &PathBuf) -> Result<()> {
                 .collect::<PathBuf>(),
         );
 
-        let metadata = source_entry.metadata()?;
-        if metadata.is_dir() {
-            std::fs::create_dir(target_path)?;
-        } else if metadata.is_file() {
-            let size = metadata.len();
-            let contents = if size == 0 {
-                Vec::new()
-            } else {
-                let mut hashes = Vec::new();
-                let input = BufReader::new(File::open(source_entry.path())?);
-                let mut bytes = input.bytes();
+        let dedup_item = DedupItemBuilder::new(source_entry.into_path())
+            .with_target(target.to_path_buf())
+            .build()?;
 
-                // Process file in MiB chunks.
-                for _ in (0..).take_while(|i| i * 1024 * 1024 < size) {
-                    let chunk = bytes
-                        .by_ref()
-                        .take(1024 * 1024)
-                        .flatten()
+        match dedup_item {
+            DedupItem::Dir(_) => {
+                std::fs::create_dir(target_path)?;
+            }
+            DedupItem::Unsupported(_) => {}
+            DedupItem::File(dedup_file) => {
+                let contents = if dedup_file.chunks.is_empty() {
+                    Vec::new()
+                } else {
+                    let hashes = dedup_file
+                        .chunks
+                        .iter()
+                        .map(|dc| dc.hash.clone())
                         .collect::<Vec<_>>();
 
-                    let mut hasher = Sha256::new();
-                    hasher.update(&chunk);
-                    let hash = hasher.finalize();
-                    let hash = base16ct::lower::encode_string(&hash);
+                    // Return compressed list of newline separated hashes.
+                    zstd::bulk::compress(&hashes.join("\n").into_bytes(), 0)?
+                };
 
-                    std::fs::write(target.join("data").join(&hash), &chunk)?;
-                    hashes.push(hash);
-                }
-
-                // Return compressed list of newline separated hashes.
-                zstd::bulk::compress(&hashes.join("\n").into_bytes(), 0)?
-            };
-
-            std::fs::write(&target_path, contents)?;
+                std::fs::write(&target_path, contents)?;
+            }
         }
     }
 
