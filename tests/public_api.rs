@@ -14,7 +14,7 @@ fn check_public_properties() -> Result<()> {
     std::fs::write(&file, "content")?;
 
     let dedup_file = DedupFile::new(file.to_path_buf())?;
-    assert_eq!(dedup_file.path, file.to_path_buf());
+    assert_eq!(dedup_file.source_path, file.to_path_buf());
 
     let chunks = dedup_file.chunks;
     assert_eq!(chunks.len(), 1);

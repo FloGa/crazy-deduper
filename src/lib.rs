@@ -59,16 +59,17 @@ pub struct DedupFileChunk {
 }
 
 pub struct DedupFile {
-    pub path: PathBuf,
+    pub source_path: PathBuf,
+    pub target_path: Option<PathBuf>,
     pub chunks: Vec<DedupFileChunk>,
 }
 
 impl DedupFile {
-    fn new_impl(path: PathBuf, target: Option<PathBuf>) -> Result<Self> {
+    fn new_with_args(args: DedupItemArgs) -> Result<Self> {
         let mut chunks = Vec::new();
 
-        let size = path.metadata()?.len();
-        let input = BufReader::new(File::open(&path)?);
+        let size = args.source_path.metadata()?.len();
+        let input = BufReader::new(File::open(&args.source_path)?);
         let mut bytes = input.bytes();
 
         // Process file in MiB chunks.
@@ -84,7 +85,7 @@ impl DedupFile {
             let hash = hasher.finalize();
             let hash = base16ct::lower::encode_string(&hash);
 
-            if let Some(target) = &target {
+            if let Some(target) = &args.target_base {
                 std::fs::write(target.join("data").join(&hash), &chunk)?;
             }
 
@@ -97,56 +98,113 @@ impl DedupFile {
             chunks.push(dedup_chunk);
         }
 
-        Ok(Self { path, chunks })
+        if let Some(target) = &args.target_path {
+            let contents = if chunks.is_empty() {
+                Vec::new()
+            } else {
+                // Return compressed list of newline separated hashes.
+                zstd::bulk::compress(
+                    &chunks
+                        .iter()
+                        .map(|chunk| chunk.hash.clone())
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                        .into_bytes(),
+                    0,
+                )?
+            };
+
+            std::fs::write(&target, contents)?;
+        }
+
+        Ok(Self {
+            source_path: args.source_path,
+            target_path: args.target_path,
+            chunks,
+        })
     }
 
     pub fn new(path: PathBuf) -> Result<Self> {
-        Self::new_impl(path, None)
+        Self::new_with_args(DedupItemArgs::new(path))
+    }
+}
+
+pub struct DedupDir {
+    pub source_path: PathBuf,
+    pub target_path: Option<PathBuf>,
+}
+
+impl DedupDir {
+    fn new(args: DedupItemArgs) -> Result<Self> {
+        if let Some(target_path) = &args.target_path {
+            std::fs::create_dir(target_path)?;
+        }
+
+        return Ok(Self {
+            source_path: args.source_path,
+            target_path: args.target_path,
+        });
+    }
+}
+
+struct DedupItemArgs {
+    source_path: PathBuf,
+    target_base: Option<PathBuf>,
+    target_path: Option<PathBuf>,
+}
+
+impl DedupItemArgs {
+    fn new(source_path: PathBuf) -> Self {
+        Self {
+            source_path,
+            target_base: None,
+            target_path: None,
+        }
     }
 
-    pub fn new_with_target(path: PathBuf, target: PathBuf) -> Result<Self> {
-        Self::new_impl(path, Some(target))
+    fn new_with_base_paths(
+        source_path: PathBuf,
+        source_base: PathBuf,
+        target_base: PathBuf,
+    ) -> Self {
+        let target_path = target_base.join("tree").join(
+            source_path
+                .components()
+                .skip(source_base.components().count())
+                .collect::<PathBuf>(),
+        );
+
+        Self {
+            source_path,
+            target_base: Some(target_base),
+            target_path: Some(target_path),
+        }
     }
 }
 
 pub enum DedupItem {
-    Dir(PathBuf),
+    Dir(DedupDir),
     File(DedupFile),
     Unsupported(PathBuf),
 }
 
-pub struct DedupItemBuilder {
-    source: PathBuf,
-    target: Option<PathBuf>,
-}
-
-impl DedupItemBuilder {
-    pub fn new(source: PathBuf) -> Self {
-        Self {
-            source,
-            target: None,
-        }
-    }
-
-    pub fn with_target(mut self, target: PathBuf) -> Self {
-        self.target = Some(target);
-        self
-    }
-
-    pub fn build(self) -> Result<DedupItem> {
-        let path = self.source;
+impl DedupItem {
+    fn new_with_args(args: DedupItemArgs) -> Result<Self> {
+        let path = args.source_path.to_path_buf();
 
         let metadata = path.metadata()?.file_type();
 
-        if metadata.is_dir() {
-            return Ok(DedupItem::Dir(path));
-        }
+        return if metadata.is_dir() {
+            DedupDir::new(args).map(|d| DedupItem::Dir(d))
+        } else if metadata.is_file() {
+            DedupFile::new_with_args(args).map(|f| DedupItem::File(f))
+        } else {
+            Ok(DedupItem::Unsupported(path))
+        };
+    }
 
-        if !metadata.is_file() {
-            return Ok(DedupItem::Unsupported(path));
-        }
-
-        DedupFile::new_impl(path, self.target).map(|f| DedupItem::File(f))
+    pub fn new(source_path: PathBuf) -> Result<Self> {
+        Self::new_with_args(DedupItemArgs::new(source_path))
     }
 }
 
@@ -158,40 +216,13 @@ pub fn populate(source: &PathBuf, target: &PathBuf) -> Result<()> {
             continue;
         }
 
-        let target_path = target.join("tree").join(
-            source_entry
-                .path()
-                .components()
-                .skip(source.components().count())
-                .collect::<PathBuf>(),
+        let args = DedupItemArgs::new_with_base_paths(
+            source_entry.into_path(),
+            source.to_path_buf(),
+            target.to_path_buf(),
         );
 
-        let dedup_item = DedupItemBuilder::new(source_entry.into_path())
-            .with_target(target.to_path_buf())
-            .build()?;
-
-        match dedup_item {
-            DedupItem::Dir(_) => {
-                std::fs::create_dir(target_path)?;
-            }
-            DedupItem::Unsupported(_) => {}
-            DedupItem::File(dedup_file) => {
-                let contents = if dedup_file.chunks.is_empty() {
-                    Vec::new()
-                } else {
-                    let hashes = dedup_file
-                        .chunks
-                        .iter()
-                        .map(|dc| dc.hash.clone())
-                        .collect::<Vec<_>>();
-
-                    // Return compressed list of newline separated hashes.
-                    zstd::bulk::compress(&hashes.join("\n").into_bytes(), 0)?
-                };
-
-                std::fs::write(&target_path, contents)?;
-            }
-        }
+        let _ = DedupItem::new_with_args(args)?;
     }
 
     Ok(())
