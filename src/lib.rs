@@ -345,4 +345,57 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn iter_tree() -> Result<()> {
+        let temp = TempDir::new()?;
+        let source = temp.child("source");
+        source.create_dir_all()?;
+
+        let file_1 = source.child("file-1");
+        let file_2 = {
+            let subdir = source.child("subdir-1");
+            subdir.create_dir_all()?;
+            subdir.child("file-2")
+        };
+        let file_3 = {
+            let subdir = source.child("subdir-2");
+            subdir.create_dir_all()?;
+            subdir.child("file-3")
+        };
+
+        let contents = "content";
+        std::fs::write(&file_1, contents)?;
+        std::fs::write(&file_2, contents)?;
+        std::fs::write(&file_3, contents)?;
+
+        let source_path = source.to_path_buf();
+        let dedup_tree = create_dedup_iter(&source_path)
+            .flatten()
+            .collect::<Vec<_>>();
+        let dedup_files = dedup_tree
+            .iter()
+            .filter_map(|d| {
+                if let DedupItem::File(f) = d {
+                    Some(f)
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>();
+
+        // 3 files + 2 dirs
+        assert_eq!(dedup_tree.len(), 3 + 2);
+        assert_eq!(dedup_files.len(), 3);
+
+        let hashes = dedup_files
+            .iter()
+            .flat_map(|f| &f.chunks)
+            .map(|c| c.hash.clone())
+            .collect::<Vec<_>>();
+
+        assert_eq!(hashes.iter().max(), hashes.iter().min());
+
+        Ok(())
+    }
 }
