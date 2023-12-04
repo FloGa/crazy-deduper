@@ -208,28 +208,43 @@ impl DedupItem {
     }
 }
 
-pub fn create_dedup_iter<'a>(
+fn create_dedup_iter_impl<'a>(
     source: &'a PathBuf,
-    target: &'a PathBuf,
+    target: Option<&'a PathBuf>,
 ) -> impl Iterator<Item = Result<DedupItem>> + 'a {
     WalkDir::new(source)
         .min_depth(1)
         .into_iter()
-        .map(|source_entry| {
+        .map(move |source_entry| {
             let source_entry = source_entry?;
 
-            let args = DedupItemArgs::new_with_base_paths(
-                source_entry.into_path(),
-                source.to_path_buf(),
-                target.to_path_buf(),
-            );
+            let args = if let Some(target) = target {
+                DedupItemArgs::new_with_base_paths(
+                    source_entry.into_path(),
+                    source.to_path_buf(),
+                    target.to_path_buf(),
+                )
+            } else {
+                DedupItemArgs::new(source_entry.into_path())
+            };
 
             DedupItem::new_with_args(args)
         })
 }
 
+pub fn create_dedup_iter<'a>(source: &'a PathBuf) -> impl Iterator<Item = Result<DedupItem>> + 'a {
+    create_dedup_iter_impl(source, None)
+}
+
+pub fn create_dedup_iter_with_target<'a>(
+    source: &'a PathBuf,
+    target: &'a PathBuf,
+) -> impl Iterator<Item = Result<DedupItem>> + 'a {
+    create_dedup_iter_impl(source, Some(target))
+}
+
 pub fn populate(source: &PathBuf, target: &PathBuf) -> Result<()> {
-    for result in create_dedup_iter(source, target) {
+    for result in create_dedup_iter_with_target(source, target) {
         if let Err(e) = result {
             return Err(e);
         }
