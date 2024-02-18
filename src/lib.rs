@@ -260,12 +260,8 @@ pub fn hydrate(source: &PathBuf, target: &PathBuf) -> Result<()> {
 
     std::fs::create_dir(target)?;
 
-    for source_entry in WalkDir::new(source.join("tree")) {
+    for source_entry in WalkDir::new(source.join("tree")).min_depth(1) {
         let source_entry = source_entry?;
-
-        if source_entry.depth() == 0 {
-            continue;
-        }
 
         let target_path = target.join(
             source_entry
