@@ -640,7 +640,7 @@ mod tests {
     }
 
     #[test]
-    fn hydrate_iter_custom_file() -> Result<()> {
+    fn hydrate_iter_small_file() -> Result<()> {
         let temp = TempDir::new()?;
         let source = temp.child("source");
         let source_path = source.to_path_buf();
@@ -679,9 +679,67 @@ mod tests {
         assert_eq!(hydrate_files.len(), 1);
 
         let hydrated_file = &hydrate_files[0];
+        assert_eq!(hydrated_file.chunks.len(), 1);
+
         let chunk = &hydrated_file.chunks[0];
 
-        assert_eq!(dummy, chunk.hash);
+        assert_eq!(chunk.hash, dummy);
+        assert_eq!(chunk.size, data_content.as_bytes().len() as u64);
+
+        Ok(())
+    }
+
+    #[test]
+    fn hydrate_iter_big_file() -> Result<()> {
+        let temp = TempDir::new()?;
+        let source = temp.child("source");
+        let source_path = source.to_path_buf();
+        ensure_init(&source_path)?;
+
+        let data = source.child("data");
+        data.create_dir_all()?;
+        let dummy_file = data.child("dummy");
+        dummy_file.touch()?;
+        let data_content = "content";
+        dummy_file.write_str(data_content)?;
+
+        let source = source.child("tree");
+        let file = source.child("file-1");
+        file.touch()?;
+        let dummy = "dummy";
+        let content = zstd::bulk::compress(format!("{dummy}\n{dummy}").as_bytes(), 0)?;
+        file.write_binary(&content)?;
+
+        let hydrate_tree = create_hydrate_iter(&source_path)
+            .flatten()
+            .collect::<Vec<_>>();
+        let hydrate_files = hydrate_tree
+            .iter()
+            .filter_map(|d| {
+                if let HydratedItem::File(f) = d {
+                    Some(f)
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>();
+
+        // 3 files + 1 dirs
+        assert_eq!(hydrate_tree.len(), 1);
+        assert_eq!(hydrate_files.len(), 1);
+
+        let hydrated_file = &hydrate_files[0];
+
+        assert_eq!(hydrated_file.chunks.len(), 2);
+
+        let chunk_1 = &hydrated_file.chunks[0];
+        let chunk_2 = &hydrated_file.chunks[1];
+
+        assert_eq!(chunk_1.hash, dummy);
+        assert_eq!(chunk_1.size, data_content.as_bytes().len() as u64);
+
+        assert_eq!(chunk_2.hash, dummy);
+        assert_eq!(chunk_2.size, data_content.as_bytes().len() as u64);
 
         Ok(())
     }
