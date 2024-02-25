@@ -54,7 +54,7 @@ pub fn check_init(base: &PathBuf) -> Result<()> {
 
 #[derive(Debug)]
 pub struct DedupFileChunk {
-    pub size: usize,
+    pub size: u64,
     pub hash: String,
 }
 
@@ -91,7 +91,7 @@ impl DedupFile {
             }
 
             let dedup_chunk = DedupFileChunk {
-                size: chunk.len(),
+                size: chunk.len() as u64,
                 hash,
             };
 
