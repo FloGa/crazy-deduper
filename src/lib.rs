@@ -278,23 +278,23 @@ impl HydratedItem {
         };
     }
 
-    pub fn new(source_path: PathBuf) -> Result<Self> {
-        Self::new_with_args(HydratedItemArgs::new(source_path))
+    pub fn new(source_path: PathBuf, source_base: PathBuf) -> Result<Self> {
+        Self::new_with_args(HydratedItemArgs::new(source_path, source_base))
     }
 }
 
 #[derive(Debug)]
 struct HydratedItemArgs {
     source_path: PathBuf,
-    source_base: Option<PathBuf>,
+    source_base: PathBuf,
     target_path: Option<PathBuf>,
 }
 
 impl HydratedItemArgs {
-    fn new(source_path: PathBuf) -> Self {
+    fn new(source_path: PathBuf, source_base: PathBuf) -> Self {
         Self {
             source_path,
-            source_base: None,
+            source_base,
             target_path: None,
         }
     }
@@ -313,7 +313,7 @@ impl HydratedItemArgs {
 
         Self {
             source_path,
-            source_base: Some(source_base),
+            source_base,
             target_path: Some(target_path),
         }
     }
@@ -361,22 +361,26 @@ impl HydratedFile {
             hashes
                 .into_iter()
                 .map(|hash| DedupFileChunk {
-                    size: 0,
+                    size: std::fs::metadata(&args.source_base.join("data").join(hash))
+                        .unwrap()
+                        .len(),
                     hash: hash.to_string(),
                 })
                 .collect::<Vec<_>>()
         };
 
-        if let (Some(source_base), Some(target_path)) = (&args.source_base, &args.target_path) {
+        if let Some(target_path) = &args.target_path {
             let out = File::create(target_path)?;
             if !chunks.is_empty() {
                 let mut out = BufWriter::new(out);
                 for chunk in &chunks {
                     out.write_all(
-                        &BufReader::new(File::open(source_base.join("data").join(&chunk.hash))?)
-                            .bytes()
-                            .flatten()
-                            .collect::<Vec<_>>(),
+                        &BufReader::new(File::open(
+                            &args.source_base.join("data").join(&chunk.hash),
+                        )?)
+                        .bytes()
+                        .flatten()
+                        .collect::<Vec<_>>(),
                     )?;
                 }
             }
@@ -389,8 +393,8 @@ impl HydratedFile {
         })
     }
 
-    pub fn new(path: PathBuf) -> Result<Self> {
-        Self::new_with_args(HydratedItemArgs::new(path))
+    pub fn new(path: PathBuf, base: PathBuf) -> Result<Self> {
+        Self::new_with_args(HydratedItemArgs::new(path, base))
     }
 }
 
@@ -411,7 +415,7 @@ fn create_hydrate_iter_impl<'a>(
                     target.to_path_buf(),
                 )
             } else {
-                HydratedItemArgs::new(source_entry.into_path())
+                HydratedItemArgs::new(source_entry.into_path(), source.to_path_buf())
             };
 
             HydratedItem::new_with_args(args)
