@@ -459,7 +459,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn small_files() -> Result<()> {
+    fn dedup_small_files() -> Result<()> {
         let temp = TempDir::new()?;
         let source = temp.child("source");
         source.create_dir_all()?;
@@ -494,7 +494,7 @@ mod tests {
     }
 
     #[test]
-    fn iter_tree() -> Result<()> {
+    fn dedup_iter_tree() -> Result<()> {
         let temp = TempDir::new()?;
         let source = temp.child("source");
         source.create_dir_all()?;
