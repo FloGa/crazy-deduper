@@ -52,12 +52,14 @@ pub fn check_init(base: &PathBuf) -> Result<()> {
     Ok(())
 }
 
+#[derive(Debug)]
 pub struct DedupFileChunk {
     pub offset: u64,
     pub size: usize,
     pub hash: String,
 }
 
+#[derive(Debug)]
 pub struct DedupFile {
     pub source_path: PathBuf,
     pub target_path: Option<PathBuf>,
@@ -129,6 +131,7 @@ impl DedupFile {
     }
 }
 
+#[derive(Debug)]
 pub struct DedupDir {
     pub source_path: PathBuf,
     pub target_path: Option<PathBuf>,
@@ -147,6 +150,7 @@ impl DedupDir {
     }
 }
 
+#[derive(Debug)]
 struct DedupItemArgs {
     source_path: PathBuf,
     target_base: Option<PathBuf>,
@@ -182,6 +186,7 @@ impl DedupItemArgs {
     }
 }
 
+#[derive(Debug)]
 pub enum DedupItem {
     Dir(DedupDir),
     File(DedupFile),
