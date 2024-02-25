@@ -24,7 +24,6 @@ fn check_public_properties() -> Result<()> {
     assert_eq!(chunks.len(), 1);
 
     let chunk = chunks.get(0).unwrap();
-    assert_eq!(chunk.offset, 0);
     assert_ne!(chunk.size, 0);
     assert_ne!(chunk.hash, "");
 

@@ -54,7 +54,6 @@ pub fn check_init(base: &PathBuf) -> Result<()> {
 
 #[derive(Debug)]
 pub struct DedupFileChunk {
-    pub offset: u64,
     pub size: usize,
     pub hash: String,
 }
@@ -75,7 +74,7 @@ impl DedupFile {
         let mut bytes = input.bytes();
 
         // Process file in MiB chunks.
-        for i in (0..).take_while(|i| i * 1024 * 1024 < size) {
+        for _ in (0..).take_while(|i| i * 1024 * 1024 < size) {
             let chunk = bytes
                 .by_ref()
                 .take(1024 * 1024)
@@ -92,7 +91,6 @@ impl DedupFile {
             }
 
             let dedup_chunk = DedupFileChunk {
-                offset: i * 1024 * 1024,
                 size: chunk.len(),
                 hash,
             };
@@ -363,7 +361,6 @@ impl HydratedFile {
             hashes
                 .into_iter()
                 .map(|hash| DedupFileChunk {
-                    offset: 0,
                     size: 0,
                     hash: hash.to_string(),
                 })
