@@ -459,6 +459,34 @@ mod tests {
     use super::*;
 
     #[test]
+    fn dedup_empty_dir() -> Result<()> {
+        let temp = TempDir::new()?;
+        let source = temp.child("source");
+        source.create_dir_all()?;
+
+        let source_path = source.to_path_buf();
+        let dedup_tree = create_dedup_iter(&source_path)
+            .flatten()
+            .collect::<Vec<_>>();
+        let dedup_files = dedup_tree
+            .iter()
+            .filter_map(|d| {
+                if let DedupItem::File(f) = d {
+                    Some(f)
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>();
+
+        // 0 files + 0 dirs
+        assert_eq!(dedup_tree.len(), 0);
+        assert_eq!(dedup_files.len(), 0);
+
+        Ok(())
+    }
+
+    #[test]
     fn dedup_small_files() -> Result<()> {
         let temp = TempDir::new()?;
         let source = temp.child("source");
@@ -542,6 +570,110 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(hashes.iter().max(), hashes.iter().min());
+
+        Ok(())
+    }
+
+    #[test]
+    fn hydrate_empty_dir() -> Result<()> {
+        let temp = TempDir::new()?;
+        let source = temp.child("source");
+        source.create_dir_all()?;
+
+        let source_path = source.to_path_buf();
+        let hydrate_tree = create_hydrate_iter(&source_path)
+            .flatten()
+            .collect::<Vec<_>>();
+        let hydrate_files = hydrate_tree
+            .iter()
+            .filter_map(|d| {
+                if let HydratedItem::File(f) = d {
+                    Some(f)
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>();
+
+        // 0 files + 0 dirs
+        assert_eq!(hydrate_tree.len(), 0);
+        assert_eq!(hydrate_files.len(), 0);
+
+        Ok(())
+    }
+
+    #[test]
+    fn hydrate_iter_empty_files() -> Result<()> {
+        let temp = TempDir::new()?;
+        let source = temp.child("source");
+        let source_path = source.to_path_buf();
+        ensure_init(&source_path)?;
+
+        let source = source.child("tree");
+        source.child("file-1").touch()?;
+        source.child("file-2").touch()?;
+
+        let subdir = source.child("subdir");
+        subdir.create_dir_all()?;
+        subdir.child("file-3").touch()?;
+
+        let hydrate_tree = create_hydrate_iter(&source_path)
+            .flatten()
+            .collect::<Vec<_>>();
+        let hydrate_files = hydrate_tree
+            .iter()
+            .filter_map(|d| {
+                if let HydratedItem::File(f) = d {
+                    Some(f)
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>();
+
+        // 3 files + 1 dirs
+        assert_eq!(hydrate_tree.len(), 4);
+        assert_eq!(hydrate_files.len(), 3);
+
+        Ok(())
+    }
+
+    #[test]
+    fn hydrate_iter_custom_file() -> Result<()> {
+        let temp = TempDir::new()?;
+        let source = temp.child("source");
+        let source_path = source.to_path_buf();
+        ensure_init(&source_path)?;
+
+        let source = source.child("tree");
+        let file = source.child("file-1");
+        file.touch()?;
+        let dummy = "dummy";
+        let content = zstd::bulk::compress(dummy.as_bytes(), 0)?;
+        file.write_binary(&content)?;
+
+        let hydrate_tree = create_hydrate_iter(&source_path)
+            .flatten()
+            .collect::<Vec<_>>();
+        let hydrate_files = hydrate_tree
+            .iter()
+            .filter_map(|d| {
+                if let HydratedItem::File(f) = d {
+                    Some(f)
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>();
+
+        // 3 files + 1 dirs
+        assert_eq!(hydrate_tree.len(), 1);
+        assert_eq!(hydrate_files.len(), 1);
+
+        let hydrated_file = &hydrate_files[0];
+        let chunk = &hydrated_file.chunks[0];
+
+        assert_eq!(dummy, chunk.hash);
 
         Ok(())
     }
