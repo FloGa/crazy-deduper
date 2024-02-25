@@ -642,6 +642,13 @@ mod tests {
         let source_path = source.to_path_buf();
         ensure_init(&source_path)?;
 
+        let data = source.child("data");
+        data.create_dir_all()?;
+        let dummy_file = data.child("dummy");
+        dummy_file.touch()?;
+        let data_content = "content";
+        dummy_file.write_str(data_content)?;
+
         let source = source.child("tree");
         let file = source.child("file-1");
         file.touch()?;
