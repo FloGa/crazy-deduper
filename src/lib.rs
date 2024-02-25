@@ -258,6 +258,182 @@ pub fn populate(source: &PathBuf, target: &PathBuf) -> Result<()> {
     Ok(())
 }
 
+#[derive(Debug)]
+pub enum HydratedItem {
+    Dir(HydratedDir),
+    File(HydratedFile),
+    Unsupported(PathBuf),
+}
+
+impl HydratedItem {
+    fn new_with_args(args: HydratedItemArgs) -> Result<Self> {
+        let path = args.source_path.to_path_buf();
+
+        let metadata = path.metadata()?.file_type();
+
+        return if metadata.is_dir() {
+            HydratedDir::new(args).map(|d| HydratedItem::Dir(d))
+        } else if metadata.is_file() {
+            HydratedFile::new_with_args(args).map(|f| HydratedItem::File(f))
+        } else {
+            Ok(HydratedItem::Unsupported(path))
+        };
+    }
+
+    pub fn new(source_path: PathBuf) -> Result<Self> {
+        Self::new_with_args(HydratedItemArgs::new(source_path))
+    }
+}
+
+#[derive(Debug)]
+struct HydratedItemArgs {
+    source_path: PathBuf,
+    source_base: Option<PathBuf>,
+    target_path: Option<PathBuf>,
+}
+
+impl HydratedItemArgs {
+    fn new(source_path: PathBuf) -> Self {
+        Self {
+            source_path,
+            source_base: None,
+            target_path: None,
+        }
+    }
+
+    fn new_with_base_paths(
+        source_path: PathBuf,
+        source_base: PathBuf,
+        target_base: PathBuf,
+    ) -> Self {
+        let target_path = target_base.join(
+            source_path
+                .components()
+                .skip(source_base.join("tree").components().count())
+                .collect::<PathBuf>(),
+        );
+
+        Self {
+            source_path,
+            source_base: Some(source_base),
+            target_path: Some(target_path),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct HydratedDir {
+    pub source_path: PathBuf,
+    pub target_path: Option<PathBuf>,
+}
+
+impl HydratedDir {
+    fn new(args: HydratedItemArgs) -> Result<Self> {
+        if let Some(target_path) = &args.target_path {
+            std::fs::create_dir(target_path)?;
+        }
+
+        return Ok(Self {
+            source_path: args.source_path,
+            target_path: args.target_path,
+        });
+    }
+}
+
+#[derive(Debug)]
+pub struct HydratedFile {
+    pub source_path: PathBuf,
+    pub target_path: Option<PathBuf>,
+    pub chunks: Vec<DedupFileChunk>,
+}
+
+impl HydratedFile {
+    fn new_with_args(args: HydratedItemArgs) -> Result<Self> {
+        let chunks = {
+            let content = if std::fs::metadata(&args.source_path)?.len() > 0 {
+                let input = File::open(&args.source_path)?;
+                zstd::stream::decode_all(input)?
+            } else {
+                Vec::new()
+            };
+
+            let content = String::from_utf8(content)?;
+            let hashes = content.split("\n");
+
+            hashes
+                .into_iter()
+                .map(|hash| DedupFileChunk {
+                    offset: 0,
+                    size: 0,
+                    hash: hash.to_string(),
+                })
+                .collect::<Vec<_>>()
+        };
+
+        if let (Some(source_base), Some(target_path)) = (&args.source_base, &args.target_path) {
+            let out = File::create(target_path)?;
+            if !chunks.is_empty() {
+                let mut out = BufWriter::new(out);
+                for chunk in &chunks {
+                    out.write_all(
+                        &BufReader::new(File::open(source_base.join("data").join(&chunk.hash))?)
+                            .bytes()
+                            .flatten()
+                            .collect::<Vec<_>>(),
+                    )?;
+                }
+            }
+        }
+
+        Ok(Self {
+            source_path: args.source_path,
+            target_path: args.target_path,
+            chunks,
+        })
+    }
+
+    pub fn new(path: PathBuf) -> Result<Self> {
+        Self::new_with_args(HydratedItemArgs::new(path))
+    }
+}
+
+fn create_hydrate_iter_impl<'a>(
+    source: &'a PathBuf,
+    target: Option<&'a PathBuf>,
+) -> impl Iterator<Item = Result<HydratedItem>> + 'a {
+    WalkDir::new(source.join("tree"))
+        .min_depth(1)
+        .into_iter()
+        .map(move |source_entry| {
+            let source_entry = source_entry?;
+
+            let args = if let Some(target) = target {
+                HydratedItemArgs::new_with_base_paths(
+                    source_entry.into_path(),
+                    source.to_path_buf(),
+                    target.to_path_buf(),
+                )
+            } else {
+                HydratedItemArgs::new(source_entry.into_path())
+            };
+
+            HydratedItem::new_with_args(args)
+        })
+}
+
+pub fn create_hydrate_iter<'a>(
+    source: &'a PathBuf,
+) -> impl Iterator<Item = Result<HydratedItem>> + 'a {
+    create_hydrate_iter_impl(source, None)
+}
+
+pub fn create_hydrate_iter_with_target<'a>(
+    source: &'a PathBuf,
+    target: &'a PathBuf,
+) -> impl Iterator<Item = Result<HydratedItem>> + 'a {
+    create_hydrate_iter_impl(source, Some(target))
+}
+
 pub fn hydrate(source: &PathBuf, target: &PathBuf) -> Result<()> {
     if target.exists() {
         return Err(Error::AlreadyExists(target.to_path_buf()));
@@ -265,39 +441,9 @@ pub fn hydrate(source: &PathBuf, target: &PathBuf) -> Result<()> {
 
     std::fs::create_dir(target)?;
 
-    for source_entry in WalkDir::new(source.join("tree")).min_depth(1) {
-        let source_entry = source_entry?;
-
-        let target_path = target.join(
-            source_entry
-                .path()
-                .components()
-                .skip(source.join("tree").components().count())
-                .collect::<PathBuf>(),
-        );
-
-        let metadata = source_entry.metadata()?;
-        if metadata.is_dir() {
-            std::fs::create_dir(target_path)?;
-        } else if metadata.is_file() {
-            let contents = if metadata.len() > 0 {
-                let input = File::open(source_entry.path())?;
-                zstd::stream::decode_all(input)?
-            } else {
-                Vec::new()
-            };
-
-            let mut out = BufWriter::new(File::create(&target_path)?);
-            if metadata.len() > 0 {
-                for hash in String::from_utf8(contents)?.split("\n") {
-                    out.write_all(
-                        &BufReader::new(File::open(source.join("data").join(hash))?)
-                            .bytes()
-                            .flatten()
-                            .collect::<Vec<_>>(),
-                    )?;
-                }
-            }
+    for result in create_hydrate_iter_with_target(source, target) {
+        if let Err(e) = result {
+            return Err(e);
         }
     }
 
