@@ -264,9 +264,32 @@ pub fn create_dedup_iter_with_target<'a>(
 }
 
 pub fn populate(source: &PathBuf, target: &PathBuf) -> Result<()> {
+    let mut cache = vec![];
+
     for result in create_dedup_iter_with_target(source, target) {
-        if let Err(e) = result {
-            return Err(e);
+        match result {
+            Ok(DedupItem::File(dedup_file)) => {
+                let file_with_chunks = FileWithChunks {
+                    path: dedup_file.source_path.into_os_string(),
+                    chunks: dedup_file
+                        .chunks
+                        .into_iter()
+                        .map(|chunk| FileChunk {
+                            size: chunk.size,
+                            hash: chunk.hash,
+                        })
+                        .collect(),
+                };
+                cache.push(file_with_chunks);
+                std::fs::write(
+                    target.join("config").join("cache.json"),
+                    serde_json::to_string(&cache)?,
+                )?;
+            }
+            Ok(..) => {}
+            Err(e) => {
+                return Err(e);
+            }
         }
     }
 
