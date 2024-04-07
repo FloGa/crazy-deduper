@@ -1,3 +1,5 @@
+use serde::{Deserialize, Serialize};
+use std::ffi::OsString;
 use std::fs::File;
 use std::io::{BufReader, BufWriter, Read, Write};
 use std::path::PathBuf;
@@ -22,9 +24,24 @@ pub enum Error {
 
     #[error(transparent)]
     Utf8(#[from] std::string::FromUtf8Error),
+
+    #[error(transparent)]
+    SerdeJson(#[from] serde_json::Error),
 }
 
 type Result<R> = std::result::Result<R, Error>;
+
+#[derive(Debug, Deserialize, Serialize)]
+struct FileWithChunks {
+    path: OsString,
+    chunks: Vec<FileChunk>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct FileChunk {
+    pub size: u64,
+    pub hash: String,
+}
 
 pub fn ensure_init(base: &PathBuf) -> Result<()> {
     if base.exists() {
