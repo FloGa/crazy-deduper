@@ -1,8 +1,9 @@
-use anyhow::{bail, Result};
+use anyhow::Result;
 use assert_fs::prelude::*;
 use assert_fs::TempDir;
+use std::path::PathBuf;
 
-use crazy_deduper::{create_dedup_iter, DedupItem};
+use crazy_deduper::Deduper;
 
 #[test]
 fn check_public_properties() -> Result<()> {
@@ -10,22 +11,27 @@ fn check_public_properties() -> Result<()> {
     let source = temp.child("source");
     source.create_dir_all()?;
 
+    let cache_file = temp.child("cache.json");
+
     let file = source.child("file");
     std::fs::write(&file, "content")?;
 
     let source_path = source.to_path_buf();
-    let mut dedup_tree = create_dedup_iter(&source_path);
-    let DedupItem::File(dedup_file) = dedup_tree.next().unwrap()? else {
-        bail!("not a file")
-    };
-    assert_eq!(dedup_file.source_path, file.to_path_buf());
+    let deduper = Deduper::new(source_path, cache_file.path());
 
-    let chunks = dedup_file.chunks;
-    assert_eq!(chunks.len(), 1);
+    let cache = &deduper.cache;
+    println!("{cache:?}");
+    assert_eq!(cache.len(), 1, "Expected file count is not 1");
+
+    let (path, fcw) = cache.iter().next().unwrap();
+    assert_eq!(PathBuf::from(&path), file.strip_prefix(&source)?);
+
+    let chunks = &fcw.chunks;
+    assert_eq!(chunks.len(), 1, "Number of chunks is not 1");
 
     let chunk = chunks.get(0).unwrap();
-    assert_ne!(chunk.size, 0);
-    assert_ne!(chunk.hash, "");
+    assert_ne!(chunk.size, 0, "Chunk size is 0");
+    assert_ne!(chunk.hash, "", "Chunk hash is empty");
 
     Ok(())
 }

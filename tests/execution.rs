@@ -6,8 +6,6 @@ use assert_fs::fixture::ChildPath;
 use assert_fs::prelude::*;
 use assert_fs::TempDir;
 
-use crazy_deduper::ensure_init;
-
 mod common;
 
 fn fixture(
@@ -18,6 +16,7 @@ fn fixture(
 
     let path_dedup = temp.child("dedup");
     let path_rehydrated = temp.child("rehydrate");
+    let cache_file = path_dedup.child("cache.json");
 
     let path_origin = temp.child("origin");
     path_origin.create_dir_all()?;
@@ -27,6 +26,8 @@ fn fixture(
     Command::new(&*common::BIN_PATH)
         .arg(path_origin.path())
         .arg(path_dedup.path())
+        .arg("--cache-file")
+        .arg(cache_file.path())
         .assert()
         .success();
 
@@ -35,6 +36,8 @@ fn fixture(
     Command::new(&*common::BIN_PATH)
         .arg(path_dedup.path())
         .arg(path_rehydrated.path())
+        .arg("--cache-file")
+        .arg(cache_file.path())
         .arg("-d")
         .assert()
         .success();
@@ -53,26 +56,6 @@ fn empty_dir() -> Result<()> {
 
     fn check_dedup(path_dedup: &ChildPath) -> Result<()> {
         assert_eq!(fs::read_dir(path_dedup.child("data"))?.count(), 0);
-        assert_eq!(fs::read_dir(path_dedup.child("tree"))?.count(), 0);
-        Ok(())
-    }
-
-    fixture(setup_origin, check_dedup)?;
-
-    Ok(())
-}
-
-#[test]
-fn empty_subdirs() -> Result<()> {
-    fn setup_origin(path_origin: &ChildPath) -> Result<()> {
-        path_origin.child("subdir1").create_dir_all()?;
-        path_origin.child("subdir2").create_dir_all()?;
-        Ok(())
-    }
-
-    fn check_dedup(path_dedup: &ChildPath) -> Result<()> {
-        assert_eq!(fs::read_dir(path_dedup.child("data"))?.count(), 0);
-        assert_eq!(fs::read_dir(path_dedup.child("tree"))?.count(), 2);
         Ok(())
     }
 
@@ -101,15 +84,6 @@ fn small_files() -> Result<()> {
     fn check_dedup(path_dedup: &ChildPath) -> Result<()> {
         // Each 2 of the 10 files are identical, so there are 5 deduplicated data blocks.
         assert_eq!(fs::read_dir(path_dedup.child("data"))?.count(), 5);
-        assert_eq!(fs::read_dir(path_dedup.child("tree"))?.count(), 2);
-        assert_eq!(
-            fs::read_dir(path_dedup.child("tree").child("subdir-0"))?.count(),
-            5
-        );
-        assert_eq!(
-            fs::read_dir(path_dedup.child("tree").child("subdir-1"))?.count(),
-            5
-        );
 
         Ok(())
     }
@@ -138,7 +112,6 @@ fn big_files() -> Result<()> {
     fn check_dedup(path_dedup: &ChildPath) -> Result<()> {
         // Each of the 2 files have 2 data blocks. File-9 is completely deduplicated.
         assert_eq!(fs::read_dir(path_dedup.child("data"))?.count(), 4);
-        assert_eq!(fs::read_dir(path_dedup.child("tree"))?.count(), 3);
 
         Ok(())
     }
@@ -167,52 +140,11 @@ fn exact_1mb_files() -> Result<()> {
     fn check_dedup(path_dedup: &ChildPath) -> Result<()> {
         // Each of the 2 files have exactly 1 data block. File-9 is completely deduplicated.
         assert_eq!(fs::read_dir(path_dedup.child("data"))?.count(), 2);
-        assert_eq!(fs::read_dir(path_dedup.child("tree"))?.count(), 3);
 
         Ok(())
     }
 
     fixture(setup_origin, check_dedup)?;
-
-    Ok(())
-}
-
-#[test]
-fn dirs_already_exist() -> Result<()> {
-    let temp = TempDir::new()?;
-    let source = temp.child("source");
-    source.create_dir_all()?;
-    let target = temp.child("target");
-    ensure_init(&target.to_path_buf())?;
-
-    Command::new(&*common::BIN_PATH)
-        .arg(source.path())
-        .arg(target.path())
-        .assert()
-        .failure();
-
-    Command::new(&*common::BIN_PATH)
-        .arg(target.path())
-        .arg(source.path())
-        .arg("-d")
-        .assert()
-        .failure();
-
-    Ok(())
-}
-
-#[test]
-fn dir_not_initialized() -> Result<()> {
-    let temp = TempDir::new()?;
-    let source = temp.child("source");
-    let target = temp.child("target");
-
-    Command::new(&*common::BIN_PATH)
-        .arg(target.path())
-        .arg(source.path())
-        .arg("-d")
-        .assert()
-        .failure();
 
     Ok(())
 }

@@ -1,9 +1,7 @@
-use std::path::PathBuf;
-
 use anyhow::Result;
 use clap::Parser;
-
-use crazy_deduper::{check_init, ensure_init, hydrate, populate};
+use crazy_deduper::{Deduper, Hydrator};
+use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -13,6 +11,10 @@ struct Cli {
 
     /// Target directory
     target: PathBuf,
+
+    /// Path to cache file
+    #[arg(long)]
+    cache_file: PathBuf,
 
     /// Invert behavior, restore tree from deduplicated data
     #[arg(long, short, visible_alias = "hydrate")]
@@ -24,13 +26,15 @@ fn main() -> Result<()> {
 
     let source = args.source;
     let target = args.target;
+    let cache_file = args.cache_file;
 
     if !args.decode {
-        ensure_init(&target)?;
-        populate(&source, &target)?;
+        let deduper = Deduper::new(source, cache_file);
+        deduper.write_chunks(target);
+        deduper.write_cache();
     } else {
-        check_init(&source)?;
-        hydrate(&source, &target)?;
+        let hydrator = Hydrator::new(source, cache_file);
+        hydrator.restore_files(target);
     }
 
     Ok(())
