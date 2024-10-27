@@ -20,11 +20,10 @@ fn check_public_properties() -> Result<()> {
     let deduper = Deduper::new(source_path, cache_file.path());
 
     let cache = &deduper.cache;
-    println!("{cache:?}");
     assert_eq!(cache.len(), 1, "Expected file count is not 1");
 
-    let (path, fcw) = cache.iter().next().unwrap();
-    assert_eq!(PathBuf::from(&path), file.strip_prefix(&source)?);
+    let fcw = cache.iter().next().unwrap();
+    assert_eq!(PathBuf::from(&fcw.path), file.strip_prefix(&source)?);
 
     let chunks = &fcw.chunks;
     assert_eq!(chunks.len(), 1, "Number of chunks is not 1");

@@ -34,9 +34,9 @@ type Result<R> = std::result::Result<R, Error>;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct FileWithChunks {
-    path: String,
-    size: u64,
-    mtime: SystemTime,
+    pub path: String,
+    pub size: u64,
+    pub mtime: SystemTime,
     pub chunks: Vec<FileChunk>,
 }
 
@@ -112,10 +112,59 @@ impl FileChunk {
     }
 }
 
+pub struct DedupCache(HashMap<String, FileWithChunks>);
+
+impl DedupCache {
+    fn new() -> DedupCache {
+        Self(HashMap::new())
+    }
+
+    fn read_from_file(&mut self, path: impl AsRef<Path>) {
+        let cache_from_file: Vec<FileWithChunks> = File::open(path)
+            .map(BufReader::new)
+            .map(|reader| serde_json::from_reader(reader))
+            .map(|result| result.unwrap())
+            .unwrap_or_default();
+
+        for x in cache_from_file {
+            self.insert(x.path.clone(), x);
+        }
+    }
+
+    fn write_to_file(&self, path: impl AsRef<Path>) {
+        std::fs::create_dir_all(path.as_ref().parent().unwrap()).unwrap();
+        File::create(path)
+            .map(BufWriter::new)
+            .map(|writer| serde_json::to_writer(writer, &self.iter().collect::<Vec<_>>()))
+            .unwrap()
+            .unwrap();
+    }
+
+    pub fn get(&self, path: &str) -> Option<&FileWithChunks> {
+        self.0.get(path)
+    }
+
+    fn insert(&mut self, path: String, fwc: FileWithChunks) {
+        self.0.insert(path, fwc);
+    }
+
+    pub fn contains_key(&self, path: &str) -> bool {
+        self.0.contains_key(path)
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = &FileWithChunks> {
+        self.0.values()
+    }
+
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+}
+
 pub struct Deduper {
     source_path: PathBuf,
     cache_path: PathBuf,
-    pub cache: HashMap<String, FileWithChunks>,
+    pub cache: DedupCache,
 }
 
 impl Deduper {
@@ -123,16 +172,8 @@ impl Deduper {
         let source_path = source_path.into();
         let cache_path = cache_path.into();
 
-        let cache: Vec<FileWithChunks> = File::open(&cache_path)
-            .map(BufReader::new)
-            .map(|reader| serde_json::from_reader(reader))
-            .map(|result| result.unwrap())
-            .unwrap_or_default();
-
-        let mut cache: HashMap<String, FileWithChunks> = cache
-            .into_iter()
-            .map(|fwc| (fwc.path.clone(), fwc))
-            .collect();
+        let mut cache = DedupCache::new();
+        cache.read_from_file(&cache_path);
 
         let dir_walker = WalkDir::new(&source_path)
             .min_depth(1)
@@ -163,23 +204,18 @@ impl Deduper {
     }
 
     pub fn write_cache(&self) {
-        std::fs::create_dir_all(self.cache_path.parent().unwrap()).unwrap();
-        File::create(&self.cache_path)
-            .map(BufWriter::new)
-            .map(|writer| serde_json::to_writer(writer, &self.cache.values().collect::<Vec<_>>()))
-            .unwrap()
-            .unwrap();
+        self.cache.write_to_file(&self.cache_path);
     }
 
     pub fn get_chunks(&self) -> HashMap<String, FileChunk> {
         self.cache
             .iter()
-            .flat_map(|(path, fwc)| {
+            .flat_map(|fwc| {
                 fwc.chunks.iter().map(|chunk| {
                     (
                         chunk.hash.clone(),
                         FileChunk {
-                            path: Some(path.clone()),
+                            path: Some(fwc.path.clone()),
                             ..chunk.clone()
                         },
                     )
@@ -212,7 +248,7 @@ impl Deduper {
 
 pub struct Hydrator {
     source_path: PathBuf,
-    pub cache: HashMap<String, FileWithChunks>,
+    pub cache: DedupCache,
 }
 
 impl Hydrator {
@@ -220,37 +256,25 @@ impl Hydrator {
         let source_path = source_path.into();
         let cache_path = cache_path.into();
 
-        let cache: Vec<FileWithChunks> = File::open(&cache_path)
-            .map(BufReader::new)
-            .map(|reader| serde_json::from_reader(reader))
-            .map(|result| result.unwrap())
-            .unwrap_or_default();
-
-        let cache: HashMap<String, FileWithChunks> = cache
-            .into_iter()
-            .map(|fwc| (fwc.path.clone(), fwc))
-            .collect();
+        let mut cache = DedupCache::new();
+        cache.read_from_file(&cache_path);
 
         Self { source_path, cache }
     }
 
     pub fn write_cache(&self) {
-        File::create("cache.json")
-            .map(BufWriter::new)
-            .map(|writer| serde_json::to_writer(writer, &self.cache.values().collect::<Vec<_>>()))
-            .unwrap()
-            .unwrap();
+        self.cache.write_to_file("cache.json");
     }
 
     pub fn get_chunks(&self) -> HashMap<String, FileChunk> {
         self.cache
             .iter()
-            .flat_map(|(path, fwc)| {
+            .flat_map(|fwc| {
                 fwc.chunks.iter().map(|chunk| {
                     (
                         chunk.hash.clone(),
                         FileChunk {
-                            path: Some(path.clone()),
+                            path: Some(fwc.path.clone()),
                             ..chunk.clone()
                         },
                     )
@@ -263,8 +287,8 @@ impl Hydrator {
         let data_dir = self.source_path.join("data");
         let target_path = target_path.into();
         std::fs::create_dir_all(&target_path).unwrap();
-        for (file_name, fwc) in &self.cache {
-            let target = target_path.join(file_name);
+        for fwc in self.cache.iter() {
+            let target = target_path.join(&fwc.path);
             std::fs::create_dir_all(&target.parent().unwrap()).unwrap();
             let mut target = BufWriter::new(File::create(&target).unwrap());
             for chunk in &fwc.chunks {
