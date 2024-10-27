@@ -140,6 +140,22 @@ impl DedupCache {
             .unwrap();
     }
 
+    pub fn get_chunks(&self) -> HashMap<String, FileChunk> {
+        self.iter()
+            .flat_map(|fwc| {
+                fwc.chunks.iter().map(|chunk| {
+                    (
+                        chunk.hash.clone(),
+                        FileChunk {
+                            path: Some(fwc.path.clone()),
+                            ..chunk.clone()
+                        },
+                    )
+                })
+            })
+            .collect()
+    }
+
     pub fn get(&self, path: &str) -> Option<&FileWithChunks> {
         self.0.get(path)
     }
@@ -207,28 +223,11 @@ impl Deduper {
         self.cache.write_to_file(&self.cache_path);
     }
 
-    pub fn get_chunks(&self) -> HashMap<String, FileChunk> {
-        self.cache
-            .iter()
-            .flat_map(|fwc| {
-                fwc.chunks.iter().map(|chunk| {
-                    (
-                        chunk.hash.clone(),
-                        FileChunk {
-                            path: Some(fwc.path.clone()),
-                            ..chunk.clone()
-                        },
-                    )
-                })
-            })
-            .collect()
-    }
-
     pub fn write_chunks(&self, target_path: impl Into<PathBuf>) {
         let target_path = target_path.into();
         let data_dir = target_path.join("data");
         std::fs::create_dir_all(&data_dir).unwrap();
-        for (_, chunk) in self.get_chunks() {
+        for (_, chunk) in self.cache.get_chunks() {
             let chunk_file = data_dir.join(&chunk.hash);
             if !chunk_file.exists() {
                 let mut out = File::create(chunk_file).unwrap();
@@ -264,23 +263,6 @@ impl Hydrator {
 
     pub fn write_cache(&self) {
         self.cache.write_to_file("cache.json");
-    }
-
-    pub fn get_chunks(&self) -> HashMap<String, FileChunk> {
-        self.cache
-            .iter()
-            .flat_map(|fwc| {
-                fwc.chunks.iter().map(|chunk| {
-                    (
-                        chunk.hash.clone(),
-                        FileChunk {
-                            path: Some(fwc.path.clone()),
-                            ..chunk.clone()
-                        },
-                    )
-                })
-            })
-            .collect()
     }
 
     pub fn restore_files(&self, target_path: impl Into<PathBuf>) {
