@@ -235,18 +235,19 @@ impl Deduper {
         for entry in dir_walker {
             let entry = entry.unwrap().into_path();
 
-            if entry.is_file()
-                && !cache.contains_key(
-                    &entry
-                        .strip_prefix(&source_path)
-                        .unwrap()
-                        .to_string_lossy()
-                        .to_string(),
-                )
-            {
-                let fwc = FileWithChunks::try_new(&source_path, &entry).unwrap();
-                cache.insert(fwc.path.clone(), fwc);
+            if !entry.is_file() {
+                continue;
             }
+
+            let fwc = FileWithChunks::try_new(&source_path, &entry).unwrap();
+
+            if let Some(fwc_cache) = cache.get(&fwc.path) {
+                if fwc == *fwc_cache {
+                    continue;
+                }
+            }
+
+            cache.insert(fwc.path.clone(), fwc);
         }
 
         Self {
