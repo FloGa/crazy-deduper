@@ -34,10 +34,11 @@ type Result<R> = std::result::Result<R, Error>;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct FileWithChunks {
+    base: PathBuf,
     pub path: String,
     pub size: u64,
     pub mtime: SystemTime,
-    pub chunks: Vec<FileChunk>,
+    pub chunks: Option<Vec<FileChunk>>,
 }
 
 impl PartialEq for FileWithChunks {
@@ -50,14 +51,13 @@ impl Eq for FileWithChunks {}
 
 impl FileWithChunks {
     pub fn try_new(source_path: impl Into<PathBuf>, path: impl Into<PathBuf>) -> Result<Self> {
-        let source_path = source_path.into();
+        let base = source_path.into();
 
         let path = path.into();
         let metadata = path.metadata()?;
-        let chunks = FileWithChunks::calculate_chunks(&path)?;
 
         let path = path
-            .strip_prefix(&source_path)
+            .strip_prefix(&base)
             .unwrap()
             .to_string_lossy()
             .to_string();
@@ -65,19 +65,38 @@ impl FileWithChunks {
         let mtime = metadata.modified()?;
 
         Ok(Self {
+            base,
             path,
             size,
             mtime,
-            chunks,
+            chunks: None,
         })
     }
 
-    fn calculate_chunks(path: impl AsRef<Path>) -> Result<Vec<FileChunk>> {
+    pub fn get_chunks(&self) -> Option<&Vec<FileChunk>> {
+        self.chunks.as_ref()
+    }
+
+    pub fn get_or_calculate_chunks(&mut self) -> Result<&Vec<FileChunk>> {
+        if self.chunks.is_none() {
+            self.calculate_chunks()?;
+        }
+
+        Ok(self.chunks.as_ref().unwrap())
+    }
+
+    fn calculate_chunks(&mut self) -> Result<()> {
+        if self.chunks.is_some() {
+            return Ok(());
+        }
+
+        let path = self.base.join(&self.path);
+
         let input = BufReader::new(File::open(&path)?);
         let mut bytes = input.bytes();
 
         let mut chunks = Vec::new();
-        let size = path.as_ref().metadata()?.len();
+        let size = path.metadata()?.len();
 
         // Process file in MiB chunks.
         for start in (0..).take_while(|i| i * 1024 * 1024 < size) {
@@ -97,7 +116,9 @@ impl FileWithChunks {
             chunks.push(file_chunk);
         }
 
-        Ok(chunks)
+        self.chunks = Some(chunks);
+
+        Ok(())
     }
 }
 
@@ -148,10 +169,14 @@ impl DedupCache {
             .unwrap();
     }
 
+    pub fn ensure_chunks_are_calculated(&mut self) -> Result<()> {
+        self.iter_mut().map(|fwc| fwc.calculate_chunks()).collect()
+    }
+
     pub fn get_chunks(&self) -> HashMap<String, FileChunk> {
         self.iter()
             .flat_map(|fwc| {
-                fwc.chunks.iter().map(|chunk| {
+                fwc.get_chunks().unwrap().iter().map(|chunk| {
                     (
                         chunk.hash.clone(),
                         FileChunk {
@@ -178,6 +203,10 @@ impl DedupCache {
 
     pub fn iter(&self) -> impl Iterator<Item = &FileWithChunks> {
         self.0.values()
+    }
+
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut FileWithChunks> {
+        self.0.values_mut()
     }
 
     pub fn len(&self) -> usize {
@@ -231,7 +260,9 @@ impl Deduper {
         self.cache.write_to_file(&self.cache_path);
     }
 
-    pub fn write_chunks(&self, target_path: impl Into<PathBuf>) {
+    pub fn write_chunks(&mut self, target_path: impl Into<PathBuf>) {
+        self.cache.ensure_chunks_are_calculated().unwrap();
+
         let target_path = target_path.into();
         let data_dir = target_path.join("data");
         std::fs::create_dir_all(&data_dir).unwrap();
@@ -281,7 +312,7 @@ impl Hydrator {
             let target = target_path.join(&fwc.path);
             std::fs::create_dir_all(&target.parent().unwrap()).unwrap();
             let mut target = BufWriter::new(File::create(&target).unwrap());
-            for chunk in &fwc.chunks {
+            for chunk in fwc.get_chunks().unwrap() {
                 let mut source = File::open(data_dir.join(&chunk.hash)).unwrap();
                 std::io::copy(&mut source, &mut target).unwrap();
             }

@@ -17,15 +17,17 @@ fn check_public_properties() -> Result<()> {
     std::fs::write(&file, "content")?;
 
     let source_path = source.to_path_buf();
-    let deduper = Deduper::new(source_path, cache_file.path());
+    let mut deduper = Deduper::new(source_path, cache_file.path());
 
-    let cache = &deduper.cache;
+    let cache = &mut deduper.cache;
     assert_eq!(cache.len(), 1, "Expected file count is not 1");
+
+    cache.ensure_chunks_are_calculated()?;
 
     let fcw = cache.iter().next().unwrap();
     assert_eq!(PathBuf::from(&fcw.path), file.strip_prefix(&source)?);
 
-    let chunks = &fcw.chunks;
+    let chunks = fcw.get_chunks().unwrap();
     assert_eq!(chunks.len(), 1, "Number of chunks is not 1");
 
     let chunk = chunks.get(0).unwrap();

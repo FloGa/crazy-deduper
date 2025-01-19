@@ -29,7 +29,7 @@ fn main() -> Result<()> {
     let cache_file = args.cache_file;
 
     if !args.decode {
-        let deduper = Deduper::new(source, cache_file);
+        let mut deduper = Deduper::new(source, cache_file);
         deduper.write_chunks(target);
         deduper.write_cache();
     } else {
