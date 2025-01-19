@@ -1,7 +1,8 @@
+use std::path::PathBuf;
+
 use anyhow::Result;
 use clap::Parser;
 use crazy_deduper::{Deduper, Hydrator};
-use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
