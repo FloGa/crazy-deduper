@@ -40,6 +40,14 @@ pub struct FileWithChunks {
     pub chunks: Vec<FileChunk>,
 }
 
+impl PartialEq for FileWithChunks {
+    fn eq(&self, other: &Self) -> bool {
+        self.path == other.path && self.size == other.size && self.mtime == other.mtime
+    }
+}
+
+impl Eq for FileWithChunks {}
+
 impl FileWithChunks {
     pub fn try_new(source_path: impl Into<PathBuf>, path: impl Into<PathBuf>) -> Result<Self> {
         let source_path = source_path.into();
@@ -279,5 +287,40 @@ impl Hydrator {
             }
             target.flush().unwrap();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use assert_fs::prelude::*;
+    use assert_fs::TempDir;
+
+    use super::*;
+
+    #[test]
+    fn compare_filechunk_objects() -> anyhow::Result<()> {
+        let temp = TempDir::new()?;
+
+        let file_1 = temp.child("file_1");
+        std::fs::write(&file_1, "content_1")?;
+
+        let file_2 = temp.child("file_2");
+        std::fs::write(&file_2, "content_2")?;
+
+        let fwc_1 = FileWithChunks::try_new(&temp.path(), &file_1.path())?;
+        let fwc_1_same = FileWithChunks::try_new(&temp.path(), &file_1.path())?;
+        let fwc_2 = FileWithChunks::try_new(&temp.path(), &file_2.path())?;
+
+        assert_eq!(fwc_1, fwc_1);
+        assert_eq!(fwc_1, fwc_1_same);
+        assert_ne!(fwc_1, fwc_2);
+
+        File::open(&file_1)?.set_modified(SystemTime::now())?;
+
+        let fwc_1_new = FileWithChunks::try_new(&temp.path(), &file_1.path())?;
+
+        assert_ne!(fwc_1, fwc_1_new);
+
+        Ok(())
     }
 }
