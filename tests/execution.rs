@@ -1,22 +1,27 @@
 use std::fs;
+use std::fs::File;
+use std::ops::Add;
+use std::path::PathBuf;
+use std::time::{Duration, SystemTime};
 
 use anyhow::Result;
 use assert_cmd::Command;
 use assert_fs::fixture::ChildPath;
 use assert_fs::prelude::*;
 use assert_fs::TempDir;
+use sha2::{Digest, Sha256};
 
 mod common;
 
-fn fixture(
+fn fixture_with_cache_file(
     setup_origin: fn(&ChildPath) -> Result<()>,
     check_dedup: fn(&ChildPath) -> Result<()>,
+    cache_file: PathBuf,
 ) -> Result<()> {
     let temp = TempDir::new()?;
 
     let path_dedup = temp.child("dedup");
     let path_rehydrated = temp.child("rehydrate");
-    let cache_file = path_dedup.child("cache.json");
 
     let path_origin = temp.child("origin");
     path_origin.create_dir_all()?;
@@ -27,9 +32,17 @@ fn fixture(
         .arg(path_origin.path())
         .arg(path_dedup.path())
         .arg("--cache-file")
-        .arg(cache_file.path())
+        .arg(cache_file.as_path())
         .assert()
         .success();
+
+    for entry in fs::read_dir(path_dedup.child("data"))? {
+        let entry = entry?;
+        assert_eq!(
+            entry.file_name().to_string_lossy(),
+            base16ct::lower::encode_string(&Sha256::digest(&fs::read(entry.path())?))
+        );
+    }
 
     check_dedup(&path_dedup)?;
 
@@ -37,7 +50,7 @@ fn fixture(
         .arg(path_dedup.path())
         .arg(path_rehydrated.path())
         .arg("--cache-file")
-        .arg(cache_file.path())
+        .arg(cache_file.as_path())
         .arg("-d")
         .assert()
         .success();
@@ -46,6 +59,14 @@ fn fixture(
     assert!(!dir_diff::is_different(path_origin, path_rehydrated).unwrap());
 
     Ok(())
+}
+
+fn fixture(
+    setup_origin: fn(&ChildPath) -> Result<()>,
+    check_dedup: fn(&ChildPath) -> Result<()>,
+) -> Result<()> {
+    let cache_file = TempDir::new()?.child("cache.json");
+    fixture_with_cache_file(setup_origin, check_dedup, cache_file.to_path_buf())
 }
 
 #[test]
@@ -145,6 +166,44 @@ fn exact_1mb_files() -> Result<()> {
     }
 
     fixture(setup_origin, check_dedup)?;
+
+    Ok(())
+}
+
+#[test]
+fn modified_files_same_cache() -> Result<()> {
+    fn setup_origin_1(path_origin: &ChildPath) -> Result<()> {
+        let child = path_origin.child("file");
+        fs::write(&child, "1")?;
+        File::open(&child)?.set_modified(SystemTime::UNIX_EPOCH)?;
+        Ok(())
+    }
+
+    // Same size as 1, however with different timestamp
+    fn setup_origin_2(path_origin: &ChildPath) -> Result<()> {
+        let child = path_origin.child("file");
+        fs::write(&child, "2")?;
+        File::open(&child)?.set_modified(SystemTime::UNIX_EPOCH.add(Duration::new(1, 0)))?;
+        Ok(())
+    }
+
+    // Same timestamp as 2, however with different size
+    fn setup_origin_12(path_origin: &ChildPath) -> Result<()> {
+        let child = path_origin.child("file");
+        fs::write(&child, "12")?;
+        File::open(&child)?.set_modified(SystemTime::UNIX_EPOCH.add(Duration::new(1, 0)))?;
+        Ok(())
+    }
+
+    fn check_dedup(_path_dedup: &ChildPath) -> Result<()> {
+        Ok(())
+    }
+
+    let cache_file = TempDir::new()?.child("cache.json");
+
+    fixture_with_cache_file(setup_origin_1, check_dedup, cache_file.to_path_buf())?;
+    fixture_with_cache_file(setup_origin_2, check_dedup, cache_file.to_path_buf())?;
+    fixture_with_cache_file(setup_origin_12, check_dedup, cache_file.to_path_buf())?;
 
     Ok(())
 }
