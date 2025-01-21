@@ -17,6 +17,9 @@ pub enum Error {
     #[error("'{0}' not properly initialized")]
     NotInitialized(PathBuf),
 
+    #[error("Cache items are not fully calculated")]
+    CacheNotFullyCalculated,
+
     #[error(transparent)]
     Io(#[from] std::io::Error),
 
@@ -169,12 +172,21 @@ impl DedupCache {
             .unwrap();
     }
 
+    fn is_cache_fully_calculated(&self) -> bool {
+        self.iter().any(|fwc| fwc.get_chunks().is_none())
+    }
+
     pub fn ensure_chunks_are_calculated(&mut self) -> Result<()> {
         self.iter_mut().map(|fwc| fwc.calculate_chunks()).collect()
     }
 
-    pub fn get_chunks(&self) -> HashMap<String, FileChunk> {
-        self.iter()
+    pub fn get_chunks(&self) -> Result<HashMap<String, FileChunk>> {
+        if self.is_cache_fully_calculated() {
+            return Err(Error::CacheNotFullyCalculated);
+        }
+
+        Ok(self
+            .iter()
             .flat_map(|fwc| {
                 fwc.get_chunks().unwrap().iter().map(|chunk| {
                     (
@@ -186,7 +198,7 @@ impl DedupCache {
                     )
                 })
             })
-            .collect()
+            .collect())
     }
 
     pub fn get(&self, path: &str) -> Option<&FileWithChunks> {
@@ -261,27 +273,29 @@ impl Deduper {
         self.cache.write_to_file(&self.cache_path);
     }
 
-    pub fn write_chunks(&mut self, target_path: impl Into<PathBuf>) {
-        self.cache.ensure_chunks_are_calculated().unwrap();
+    pub fn write_chunks(&mut self, target_path: impl Into<PathBuf>) -> Result<()> {
+        self.cache.ensure_chunks_are_calculated()?;
 
         let target_path = target_path.into();
         let data_dir = target_path.join("data");
-        std::fs::create_dir_all(&data_dir).unwrap();
-        for (_, chunk) in self.cache.get_chunks() {
+        std::fs::create_dir_all(&data_dir)?;
+        for (_, chunk) in self.cache.get_chunks()? {
             let chunk_file = data_dir.join(&chunk.hash);
             if !chunk_file.exists() {
-                let mut out = File::create(chunk_file).unwrap();
-                let data_in = BufReader::new(
-                    File::open(self.source_path.join(chunk.path.as_ref().unwrap())).unwrap(),
-                )
+                let mut out = File::create(chunk_file)?;
+                let data_in = BufReader::new(File::open(
+                    self.source_path.join(chunk.path.as_ref().unwrap()),
+                )?)
                 .bytes()
                 .skip(chunk.start as usize)
                 .take(chunk.size as usize)
                 .flatten()
                 .collect::<Vec<_>>();
-                out.write_all(&data_in).unwrap();
+                out.write_all(&data_in)?;
             }
         }
+
+        Ok(())
     }
 }
 

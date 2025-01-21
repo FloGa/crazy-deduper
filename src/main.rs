@@ -31,7 +31,7 @@ fn main() -> Result<()> {
 
     if !args.decode {
         let mut deduper = Deduper::new(source, cache_file);
-        deduper.write_chunks(target);
+        deduper.write_chunks(target)?;
         deduper.write_cache();
     } else {
         let hydrator = Hydrator::new(source, cache_file);
