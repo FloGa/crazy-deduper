@@ -315,10 +315,6 @@ impl Hydrator {
         Self { source_path, cache }
     }
 
-    pub fn write_cache(&self) {
-        self.cache.write_to_file("cache.json");
-    }
-
     pub fn restore_files(&self, target_path: impl Into<PathBuf>) {
         let data_dir = self.source_path.join("data");
         let target_path = target_path.into();
