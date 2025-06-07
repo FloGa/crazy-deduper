@@ -322,12 +322,14 @@ impl Hydrator {
         for fwc in self.cache.iter() {
             let target = target_path.join(&fwc.path);
             std::fs::create_dir_all(&target.parent().unwrap()).unwrap();
-            let mut target = BufWriter::new(File::create(&target).unwrap());
+            let target_file = File::create(&target).unwrap();
+            let mut target = BufWriter::new(&target_file);
             for chunk in fwc.get_chunks().unwrap() {
                 let mut source = File::open(data_dir.join(&chunk.hash)).unwrap();
                 std::io::copy(&mut source, &mut target).unwrap();
             }
             target.flush().unwrap();
+            target_file.set_modified(fwc.mtime).unwrap()
         }
     }
 }

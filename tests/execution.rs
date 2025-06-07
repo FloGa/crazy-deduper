@@ -10,6 +10,7 @@ use assert_fs::fixture::ChildPath;
 use assert_fs::prelude::*;
 use assert_fs::TempDir;
 use sha2::{Digest, Sha256};
+use walkdir::WalkDir;
 
 mod common;
 
@@ -56,7 +57,31 @@ fn fixture_with_cache_file(
         .success();
 
     // Check if we can replicate the original directory.
-    assert!(!dir_diff::is_different(path_origin, path_rehydrated).unwrap());
+    let files_origin = WalkDir::new(&path_origin).min_depth(1).sort_by_file_name();
+    let files_rehydrated = WalkDir::new(&path_rehydrated)
+        .min_depth(1)
+        .sort_by_file_name();
+
+    for (file_origin, file_rehydrated) in files_origin.into_iter().zip(files_rehydrated.into_iter())
+    {
+        let file_origin = file_origin?;
+        let file_rehydrated = file_rehydrated?;
+
+        assert_eq!(file_origin.depth(), file_rehydrated.depth());
+        assert_eq!(file_origin.file_type(), file_rehydrated.file_type());
+        assert_eq!(file_origin.file_name(), file_rehydrated.file_name());
+
+        if file_origin.file_type().is_file() {
+            assert_eq!(
+                file_origin.metadata()?.modified()?,
+                file_rehydrated.metadata()?.modified()?
+            );
+            assert_eq!(
+                fs::read(file_origin.path())?,
+                fs::read(file_rehydrated.path())?
+            );
+        }
+    }
 
     Ok(())
 }
