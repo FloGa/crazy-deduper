@@ -1,9 +1,9 @@
 use std::path::PathBuf;
 
-use anyhow::{bail, Result};
+use anyhow::Result;
 use assert_fs::prelude::*;
 use assert_fs::TempDir;
-use crazy_deduper::{Deduper, Error};
+use crazy_deduper::Deduper;
 
 #[test]
 fn check_public_properties() -> Result<()> {
@@ -22,24 +22,10 @@ fn check_public_properties() -> Result<()> {
     let cache = &mut deduper.cache;
     assert_eq!(cache.len(), 1, "Expected file count is not 1");
 
-    match cache.get_chunks() {
-        Err(Error::CacheNotFullyCalculated) => {}
-        _ => bail!("Cache is fully calculated when it shouldn't be"),
-    }
-
-    cache.ensure_chunks_are_calculated()?;
-
-    match cache.get_chunks() {
-        Err(Error::CacheNotFullyCalculated) => {
-            bail!("Cache is not fully calculated when it should be")
-        }
-        _ => {}
-    }
-
     let fcw = cache.iter().next().unwrap();
     assert_eq!(PathBuf::from(&fcw.path), file.strip_prefix(&source)?);
 
-    let chunks = fcw.get_chunks().unwrap();
+    let chunks = fcw.get_or_calculate_chunks().unwrap();
     assert_eq!(chunks.len(), 1, "Number of chunks is not 1");
 
     let chunk = chunks.get(0).unwrap();

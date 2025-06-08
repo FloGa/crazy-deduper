@@ -1,6 +1,8 @@
+use std::cell::OnceCell;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufReader, BufWriter, Read, Write};
+use std::ops::Deref;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
@@ -17,9 +19,6 @@ pub enum Error {
     #[error("'{0}' not properly initialized")]
     NotInitialized(PathBuf),
 
-    #[error("Cache items are not fully calculated")]
-    CacheNotFullyCalculated,
-
     #[error(transparent)]
     Io(#[from] std::io::Error),
 
@@ -35,13 +34,53 @@ pub enum Error {
 
 type Result<R> = std::result::Result<R, Error>;
 
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(from = "Option<T>")]
+#[serde(into = "Option<T>")]
+struct LazyOption<T>(OnceCell<T>)
+where
+    T: Clone;
+
+impl<T> From<Option<T>> for LazyOption<T>
+where
+    T: Clone,
+{
+    fn from(value: Option<T>) -> Self {
+        Self(if let Some(value) = value {
+            OnceCell::from(value)
+        } else {
+            OnceCell::new()
+        })
+    }
+}
+
+impl<T> Into<Option<T>> for LazyOption<T>
+where
+    T: Clone,
+{
+    fn into(self) -> Option<T> {
+        self.0.get().cloned()
+    }
+}
+
+impl<T> Deref for LazyOption<T>
+where
+    T: Clone,
+{
+    type Target = OnceCell<T>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct FileWithChunks {
     base: PathBuf,
     pub path: String,
     pub size: u64,
     pub mtime: SystemTime,
-    pub chunks: Option<Vec<FileChunk>>,
+    chunks: LazyOption<Vec<FileChunk>>,
 }
 
 impl PartialEq for FileWithChunks {
@@ -72,27 +111,26 @@ impl FileWithChunks {
             path,
             size,
             mtime,
-            chunks: None,
+            chunks: Default::default(),
         })
     }
 
     pub fn get_chunks(&self) -> Option<&Vec<FileChunk>> {
-        self.chunks.as_ref()
+        self.chunks.get()
     }
 
-    pub fn get_or_calculate_chunks(&mut self) -> Result<&Vec<FileChunk>> {
-        if self.chunks.is_none() {
-            self.calculate_chunks()?;
+    pub fn get_or_calculate_chunks(&self) -> Result<&Vec<FileChunk>> {
+        if self.chunks.get().is_none() {
+            let chunks = self.calculate_chunks()?;
+
+            // Cannot panic, we already checked that it is empty.
+            self.chunks.set(chunks.clone()).unwrap();
         }
 
-        Ok(self.chunks.as_ref().unwrap())
+        Ok(self.chunks.get().unwrap())
     }
 
-    fn calculate_chunks(&mut self) -> Result<()> {
-        if self.chunks.is_some() {
-            return Ok(());
-        }
-
+    fn calculate_chunks(&self) -> Result<Vec<FileChunk>> {
         let path = self.base.join(&self.path);
 
         let input = BufReader::new(File::open(&path)?);
@@ -119,9 +157,7 @@ impl FileWithChunks {
             chunks.push(file_chunk);
         }
 
-        self.chunks = Some(chunks);
-
-        Ok(())
+        Ok(chunks)
     }
 }
 
@@ -172,23 +208,11 @@ impl DedupCache {
             .unwrap();
     }
 
-    fn is_cache_fully_calculated(&self) -> bool {
-        self.iter().any(|fwc| fwc.get_chunks().is_none())
-    }
-
-    pub fn ensure_chunks_are_calculated(&mut self) -> Result<()> {
-        self.iter_mut().map(|fwc| fwc.calculate_chunks()).collect()
-    }
-
     pub fn get_chunks(&self) -> Result<HashMap<String, FileChunk>> {
-        if self.is_cache_fully_calculated() {
-            return Err(Error::CacheNotFullyCalculated);
-        }
-
         Ok(self
             .iter()
             .flat_map(|fwc| {
-                fwc.get_chunks().unwrap().iter().map(|chunk| {
+                fwc.get_or_calculate_chunks().unwrap().iter().map(|chunk| {
                     (
                         chunk.hash.clone(),
                         FileChunk {
@@ -215,10 +239,6 @@ impl DedupCache {
 
     pub fn iter(&self) -> impl Iterator<Item = &FileWithChunks> {
         self.0.values()
-    }
-
-    pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut FileWithChunks> {
-        self.0.values_mut()
     }
 
     pub fn len(&self) -> usize {
@@ -274,8 +294,6 @@ impl Deduper {
     }
 
     pub fn write_chunks(&mut self, target_path: impl Into<PathBuf>) -> Result<()> {
-        self.cache.ensure_chunks_are_calculated()?;
-
         let target_path = target_path.into();
         let data_dir = target_path.join("data");
         std::fs::create_dir_all(&data_dir)?;
