@@ -166,6 +166,7 @@ pub struct FileChunk {
     pub start: u64,
     pub size: u64,
     pub hash: String,
+    #[serde(skip)]
     pub path: Option<String>,
 }
 
