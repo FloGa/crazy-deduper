@@ -209,21 +209,28 @@ impl DedupCache {
             .unwrap();
     }
 
-    pub fn get_chunks(&self) -> Result<HashMap<String, FileChunk>> {
-        Ok(self
-            .iter()
-            .flat_map(|fwc| {
-                fwc.get_or_calculate_chunks().unwrap().iter().map(|chunk| {
-                    (
+    pub fn get_chunks(&self) -> Result<impl Iterator<Item = (String, FileChunk, bool)> + '_> {
+        Ok(self.iter().flat_map(|fwc| {
+            let mut dirty = fwc.get_chunks().is_none();
+
+            fwc.get_or_calculate_chunks()
+                .unwrap()
+                .iter()
+                .map(move |chunk| {
+                    let result = (
                         chunk.hash.clone(),
                         FileChunk {
                             path: Some(fwc.path.clone()),
                             ..chunk.clone()
                         },
-                    )
+                        dirty,
+                    );
+
+                    dirty = false;
+
+                    result
                 })
-            })
-            .collect())
+        }))
     }
 
     pub fn get(&self, path: &str) -> Option<&FileWithChunks> {
@@ -298,7 +305,7 @@ impl Deduper {
         let target_path = target_path.into();
         let data_dir = target_path.join("data");
         std::fs::create_dir_all(&data_dir)?;
-        for (_, chunk) in self.cache.get_chunks()? {
+        for (_, chunk, _) in self.cache.get_chunks()? {
             let chunk_file = data_dir.join(&chunk.hash);
             if !chunk_file.exists() {
                 let mut out = File::create(chunk_file)?;
