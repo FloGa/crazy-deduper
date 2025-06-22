@@ -1,7 +1,12 @@
+use std::cell::OnceCell;
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufReader, BufWriter, Read, Write};
-use std::path::PathBuf;
+use std::ops::Deref;
+use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 use walkdir::WalkDir;
@@ -22,59 +27,120 @@ pub enum Error {
 
     #[error(transparent)]
     Utf8(#[from] std::string::FromUtf8Error),
+
+    #[error(transparent)]
+    SerdeJson(#[from] serde_json::Error),
 }
 
 type Result<R> = std::result::Result<R, Error>;
 
-pub fn ensure_init(base: &PathBuf) -> Result<()> {
-    if base.exists() {
-        return Err(Error::AlreadyExists(base.to_path_buf()));
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(from = "Option<T>")]
+#[serde(into = "Option<T>")]
+struct LazyOption<T>(OnceCell<T>)
+where
+    T: Clone;
+
+impl<T> From<Option<T>> for LazyOption<T>
+where
+    T: Clone,
+{
+    fn from(value: Option<T>) -> Self {
+        Self(if let Some(value) = value {
+            OnceCell::from(value)
+        } else {
+            OnceCell::new()
+        })
     }
-
-    std::fs::create_dir(base)?;
-    std::fs::create_dir(base.join("config"))?;
-    std::fs::create_dir(base.join("data"))?;
-    std::fs::create_dir(base.join("tree"))?;
-
-    Ok(())
 }
 
-pub fn check_init(base: &PathBuf) -> Result<()> {
-    let all_exist = base.exists()
-        && base.join("config").exists()
-        && base.join("data").exists()
-        && base.join("tree").exists();
-
-    if !all_exist {
-        return Err(Error::NotInitialized(base.to_path_buf()));
+impl<T> Into<Option<T>> for LazyOption<T>
+where
+    T: Clone,
+{
+    fn into(self) -> Option<T> {
+        self.0.get().cloned()
     }
-
-    Ok(())
 }
 
-#[derive(Debug)]
-pub struct DedupFileChunk {
+impl<T> Deref for LazyOption<T>
+where
+    T: Clone,
+{
+    type Target = OnceCell<T>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct FileWithChunks {
+    base: PathBuf,
+    pub path: String,
     pub size: u64,
-    pub hash: String,
+    pub mtime: SystemTime,
+    chunks: LazyOption<Vec<FileChunk>>,
 }
 
-#[derive(Debug)]
-pub struct DedupFile {
-    pub source_path: PathBuf,
-    pub target_path: Option<PathBuf>,
-    pub chunks: Vec<DedupFileChunk>,
+impl PartialEq for FileWithChunks {
+    fn eq(&self, other: &Self) -> bool {
+        self.path == other.path && self.size == other.size && self.mtime == other.mtime
+    }
 }
 
-impl DedupFile {
-    fn new_with_args(args: DedupItemArgs) -> Result<Self> {
-        let mut chunks = Vec::new();
+impl Eq for FileWithChunks {}
 
-        let size = args.source_path.metadata()?.len();
-        let input = BufReader::new(File::open(&args.source_path)?);
+impl FileWithChunks {
+    pub fn try_new(source_path: impl Into<PathBuf>, path: impl Into<PathBuf>) -> Result<Self> {
+        let base = source_path.into();
+
+        let path = path.into();
+        let metadata = path.metadata()?;
+
+        let path = path
+            .strip_prefix(&base)
+            .unwrap()
+            .to_string_lossy()
+            .to_string();
+        let size = metadata.len();
+        let mtime = metadata.modified()?;
+
+        Ok(Self {
+            base,
+            path,
+            size,
+            mtime,
+            chunks: Default::default(),
+        })
+    }
+
+    pub fn get_chunks(&self) -> Option<&Vec<FileChunk>> {
+        self.chunks.get()
+    }
+
+    pub fn get_or_calculate_chunks(&self) -> Result<&Vec<FileChunk>> {
+        if self.chunks.get().is_none() {
+            let chunks = self.calculate_chunks()?;
+
+            // Cannot panic, we already checked that it is empty.
+            self.chunks.set(chunks.clone()).unwrap();
+        }
+
+        Ok(self.chunks.get().unwrap())
+    }
+
+    fn calculate_chunks(&self) -> Result<Vec<FileChunk>> {
+        let path = self.base.join(&self.path);
+
+        let input = BufReader::new(File::open(&path)?);
         let mut bytes = input.bytes();
 
+        let mut chunks = Vec::new();
+        let size = path.metadata()?.len();
+
         // Process file in MiB chunks.
-        for _ in (0..).take_while(|i| i * 1024 * 1024 < size) {
+        for start in (0..).take_while(|i| i * 1024 * 1024 < size) {
             let chunk = bytes
                 .by_ref()
                 .take(1024 * 1024)
@@ -86,660 +152,252 @@ impl DedupFile {
             let hash = hasher.finalize();
             let hash = base16ct::lower::encode_string(&hash);
 
-            if let Some(target) = &args.target_base {
-                std::fs::write(target.join("data").join(&hash), &chunk)?;
+            let file_chunk = FileChunk::new(start * 1024 * 1024, chunk.len() as u64, hash);
+
+            chunks.push(file_chunk);
+        }
+
+        Ok(chunks)
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct FileChunk {
+    pub start: u64,
+    pub size: u64,
+    pub hash: String,
+    #[serde(skip)]
+    pub path: Option<String>,
+}
+
+impl FileChunk {
+    pub fn new(start: u64, size: u64, hash: String) -> Self {
+        Self {
+            start,
+            size,
+            hash,
+            path: None,
+        }
+    }
+}
+
+pub struct DedupCache(HashMap<String, FileWithChunks>);
+
+impl DedupCache {
+    fn new() -> DedupCache {
+        Self(HashMap::new())
+    }
+
+    fn read_from_file(&mut self, path: impl AsRef<Path>) {
+        let cache_from_file: Vec<FileWithChunks> = File::open(path)
+            .map(BufReader::new)
+            .map(|reader| serde_json::from_reader(reader))
+            .map(|result| result.unwrap())
+            .unwrap_or_default();
+
+        for x in cache_from_file {
+            self.insert(x.path.clone(), x);
+        }
+    }
+
+    fn write_to_file(&self, path: impl AsRef<Path>) {
+        std::fs::create_dir_all(path.as_ref().parent().unwrap()).unwrap();
+        File::create(path)
+            .map(BufWriter::new)
+            .map(|writer| serde_json::to_writer(writer, &self.iter().collect::<Vec<_>>()))
+            .unwrap()
+            .unwrap();
+    }
+
+    pub fn get_chunks(&self) -> Result<impl Iterator<Item = (String, FileChunk, bool)> + '_> {
+        Ok(self.iter().flat_map(|fwc| {
+            let mut dirty = fwc.get_chunks().is_none();
+
+            fwc.get_or_calculate_chunks()
+                .unwrap()
+                .iter()
+                .map(move |chunk| {
+                    let result = (
+                        chunk.hash.clone(),
+                        FileChunk {
+                            path: Some(fwc.path.clone()),
+                            ..chunk.clone()
+                        },
+                        dirty,
+                    );
+
+                    dirty = false;
+
+                    result
+                })
+        }))
+    }
+
+    pub fn get(&self, path: &str) -> Option<&FileWithChunks> {
+        self.0.get(path)
+    }
+
+    fn insert(&mut self, path: String, fwc: FileWithChunks) {
+        self.0.insert(path, fwc);
+    }
+
+    pub fn contains_key(&self, path: &str) -> bool {
+        self.0.contains_key(path)
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = &FileWithChunks> {
+        self.0.values()
+    }
+
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+}
+
+pub struct Deduper {
+    source_path: PathBuf,
+    cache_path: PathBuf,
+    pub cache: DedupCache,
+}
+
+impl Deduper {
+    pub fn new(source_path: impl Into<PathBuf>, cache_path: impl Into<PathBuf>) -> Self {
+        let source_path = source_path.into();
+        let cache_path = cache_path.into();
+
+        let mut cache = DedupCache::new();
+        cache.read_from_file(&cache_path);
+
+        let dir_walker = WalkDir::new(&source_path)
+            .min_depth(1)
+            .same_file_system(true);
+
+        for entry in dir_walker {
+            let entry = entry.unwrap().into_path();
+
+            if !entry.is_file() {
+                continue;
             }
 
-            let dedup_chunk = DedupFileChunk {
-                size: chunk.len() as u64,
-                hash,
-            };
+            let fwc = FileWithChunks::try_new(&source_path, &entry).unwrap();
 
-            chunks.push(dedup_chunk);
-        }
-
-        if let Some(target) = &args.target_path {
-            let contents = if chunks.is_empty() {
-                Vec::new()
-            } else {
-                // Return compressed list of newline separated hashes.
-                zstd::bulk::compress(
-                    &chunks
-                        .iter()
-                        .map(|chunk| chunk.hash.clone())
-                        .collect::<Vec<_>>()
-                        .join("\n")
-                        .into_bytes(),
-                    0,
-                )?
-            };
-
-            std::fs::write(&target, contents)?;
-        }
-
-        Ok(Self {
-            source_path: args.source_path,
-            target_path: args.target_path,
-            chunks,
-        })
-    }
-
-    pub fn new(path: PathBuf) -> Result<Self> {
-        Self::new_with_args(DedupItemArgs::new(path))
-    }
-}
-
-#[derive(Debug)]
-pub struct DedupDir {
-    pub source_path: PathBuf,
-    pub target_path: Option<PathBuf>,
-}
-
-impl DedupDir {
-    fn new(args: DedupItemArgs) -> Result<Self> {
-        if let Some(target_path) = &args.target_path {
-            std::fs::create_dir(target_path)?;
-        }
-
-        return Ok(Self {
-            source_path: args.source_path,
-            target_path: args.target_path,
-        });
-    }
-}
-
-#[derive(Debug)]
-struct DedupItemArgs {
-    source_path: PathBuf,
-    target_base: Option<PathBuf>,
-    target_path: Option<PathBuf>,
-}
-
-impl DedupItemArgs {
-    fn new(source_path: PathBuf) -> Self {
-        Self {
-            source_path,
-            target_base: None,
-            target_path: None,
-        }
-    }
-
-    fn new_with_base_paths(
-        source_path: PathBuf,
-        source_base: PathBuf,
-        target_base: PathBuf,
-    ) -> Self {
-        let target_path = target_base.join("tree").join(
-            source_path
-                .components()
-                .skip(source_base.components().count())
-                .collect::<PathBuf>(),
-        );
-
-        Self {
-            source_path,
-            target_base: Some(target_base),
-            target_path: Some(target_path),
-        }
-    }
-}
-
-#[derive(Debug)]
-pub enum DedupItem {
-    Dir(DedupDir),
-    File(DedupFile),
-    Unsupported(PathBuf),
-}
-
-impl DedupItem {
-    fn new_with_args(args: DedupItemArgs) -> Result<Self> {
-        let path = args.source_path.to_path_buf();
-
-        let metadata = path.metadata()?.file_type();
-
-        return if metadata.is_dir() {
-            DedupDir::new(args).map(|d| DedupItem::Dir(d))
-        } else if metadata.is_file() {
-            DedupFile::new_with_args(args).map(|f| DedupItem::File(f))
-        } else {
-            Ok(DedupItem::Unsupported(path))
-        };
-    }
-
-    pub fn new(source_path: PathBuf) -> Result<Self> {
-        Self::new_with_args(DedupItemArgs::new(source_path))
-    }
-}
-
-fn create_dedup_iter_impl<'a>(
-    source: &'a PathBuf,
-    target: Option<&'a PathBuf>,
-) -> impl Iterator<Item = Result<DedupItem>> + 'a {
-    WalkDir::new(source)
-        .min_depth(1)
-        .into_iter()
-        .map(move |source_entry| {
-            let source_entry = source_entry?;
-
-            let args = if let Some(target) = target {
-                DedupItemArgs::new_with_base_paths(
-                    source_entry.into_path(),
-                    source.to_path_buf(),
-                    target.to_path_buf(),
-                )
-            } else {
-                DedupItemArgs::new(source_entry.into_path())
-            };
-
-            DedupItem::new_with_args(args)
-        })
-}
-
-pub fn create_dedup_iter<'a>(source: &'a PathBuf) -> impl Iterator<Item = Result<DedupItem>> + 'a {
-    create_dedup_iter_impl(source, None)
-}
-
-pub fn create_dedup_iter_with_target<'a>(
-    source: &'a PathBuf,
-    target: &'a PathBuf,
-) -> impl Iterator<Item = Result<DedupItem>> + 'a {
-    create_dedup_iter_impl(source, Some(target))
-}
-
-pub fn populate(source: &PathBuf, target: &PathBuf) -> Result<()> {
-    for result in create_dedup_iter_with_target(source, target) {
-        if let Err(e) = result {
-            return Err(e);
-        }
-    }
-
-    Ok(())
-}
-
-#[derive(Debug)]
-pub enum HydratedItem {
-    Dir(HydratedDir),
-    File(HydratedFile),
-    Unsupported(PathBuf),
-}
-
-impl HydratedItem {
-    fn new_with_args(args: HydratedItemArgs) -> Result<Self> {
-        let path = args.source_path.to_path_buf();
-
-        let metadata = path.metadata()?.file_type();
-
-        return if metadata.is_dir() {
-            HydratedDir::new(args).map(|d| HydratedItem::Dir(d))
-        } else if metadata.is_file() {
-            HydratedFile::new_with_args(args).map(|f| HydratedItem::File(f))
-        } else {
-            Ok(HydratedItem::Unsupported(path))
-        };
-    }
-
-    pub fn new(source_path: PathBuf, source_base: PathBuf) -> Result<Self> {
-        Self::new_with_args(HydratedItemArgs::new(source_path, source_base))
-    }
-}
-
-#[derive(Debug)]
-struct HydratedItemArgs {
-    source_path: PathBuf,
-    source_base: PathBuf,
-    target_path: Option<PathBuf>,
-}
-
-impl HydratedItemArgs {
-    fn new(source_path: PathBuf, source_base: PathBuf) -> Self {
-        Self {
-            source_path,
-            source_base,
-            target_path: None,
-        }
-    }
-
-    fn new_with_base_paths(
-        source_path: PathBuf,
-        source_base: PathBuf,
-        target_base: PathBuf,
-    ) -> Self {
-        let target_path = target_base.join(
-            source_path
-                .components()
-                .skip(source_base.join("tree").components().count())
-                .collect::<PathBuf>(),
-        );
-
-        Self {
-            source_path,
-            source_base,
-            target_path: Some(target_path),
-        }
-    }
-}
-
-#[derive(Debug)]
-pub struct HydratedDir {
-    pub source_path: PathBuf,
-    pub target_path: Option<PathBuf>,
-}
-
-impl HydratedDir {
-    fn new(args: HydratedItemArgs) -> Result<Self> {
-        if let Some(target_path) = &args.target_path {
-            std::fs::create_dir(target_path)?;
-        }
-
-        return Ok(Self {
-            source_path: args.source_path,
-            target_path: args.target_path,
-        });
-    }
-}
-
-#[derive(Debug)]
-pub struct HydratedFile {
-    pub source_path: PathBuf,
-    pub target_path: Option<PathBuf>,
-    pub chunks: Vec<DedupFileChunk>,
-}
-
-impl HydratedFile {
-    fn new_with_args(args: HydratedItemArgs) -> Result<Self> {
-        let chunks = {
-            let content = if std::fs::metadata(&args.source_path)?.len() > 0 {
-                let input = File::open(&args.source_path)?;
-                zstd::stream::decode_all(input)?
-            } else {
-                Vec::new()
-            };
-
-            let content = String::from_utf8(content)?;
-            let hashes = content.split("\n");
-
-            hashes
-                .into_iter()
-                .map(|hash| DedupFileChunk {
-                    size: std::fs::metadata(&args.source_base.join("data").join(hash))
-                        .unwrap()
-                        .len(),
-                    hash: hash.to_string(),
-                })
-                .collect::<Vec<_>>()
-        };
-
-        if let Some(target_path) = &args.target_path {
-            let out = File::create(target_path)?;
-            if !chunks.is_empty() {
-                let mut out = BufWriter::new(out);
-                for chunk in &chunks {
-                    out.write_all(
-                        &BufReader::new(File::open(
-                            &args.source_base.join("data").join(&chunk.hash),
-                        )?)
-                        .bytes()
-                        .flatten()
-                        .collect::<Vec<_>>(),
-                    )?;
+            if let Some(fwc_cache) = cache.get(&fwc.path) {
+                if fwc == *fwc_cache {
+                    continue;
                 }
             }
+
+            cache.insert(fwc.path.clone(), fwc);
         }
 
-        Ok(Self {
-            source_path: args.source_path,
-            target_path: args.target_path,
-            chunks,
-        })
-    }
-
-    pub fn new(path: PathBuf, base: PathBuf) -> Result<Self> {
-        Self::new_with_args(HydratedItemArgs::new(path, base))
-    }
-}
-
-fn create_hydrate_iter_impl<'a>(
-    source: &'a PathBuf,
-    target: Option<&'a PathBuf>,
-) -> impl Iterator<Item = Result<HydratedItem>> + 'a {
-    WalkDir::new(source.join("tree"))
-        .min_depth(1)
-        .into_iter()
-        .map(move |source_entry| {
-            let source_entry = source_entry?;
-
-            let args = if let Some(target) = target {
-                HydratedItemArgs::new_with_base_paths(
-                    source_entry.into_path(),
-                    source.to_path_buf(),
-                    target.to_path_buf(),
-                )
-            } else {
-                HydratedItemArgs::new(source_entry.into_path(), source.to_path_buf())
-            };
-
-            HydratedItem::new_with_args(args)
-        })
-}
-
-pub fn create_hydrate_iter<'a>(
-    source: &'a PathBuf,
-) -> impl Iterator<Item = Result<HydratedItem>> + 'a {
-    create_hydrate_iter_impl(source, None)
-}
-
-pub fn create_hydrate_iter_with_target<'a>(
-    source: &'a PathBuf,
-    target: &'a PathBuf,
-) -> impl Iterator<Item = Result<HydratedItem>> + 'a {
-    create_hydrate_iter_impl(source, Some(target))
-}
-
-pub fn hydrate(source: &PathBuf, target: &PathBuf) -> Result<()> {
-    if target.exists() {
-        return Err(Error::AlreadyExists(target.to_path_buf()));
-    }
-
-    std::fs::create_dir(target)?;
-
-    for result in create_hydrate_iter_with_target(source, target) {
-        if let Err(e) = result {
-            return Err(e);
+        Self {
+            source_path,
+            cache_path,
+            cache,
         }
     }
 
-    Ok(())
+    pub fn write_cache(&self) {
+        let temp_path = self.cache_path.clone().with_extension(format!(
+            "tmp.{}",
+            SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap()
+                .as_millis()
+        ));
+        self.cache.write_to_file(&temp_path);
+        std::fs::rename(temp_path, &self.cache_path).unwrap();
+    }
+
+    pub fn write_chunks(&mut self, target_path: impl Into<PathBuf>) -> Result<()> {
+        let target_path = target_path.into();
+        let data_dir = target_path.join("data");
+        std::fs::create_dir_all(&data_dir)?;
+        for (_, chunk, _) in self.cache.get_chunks()? {
+            let chunk_file = data_dir.join(&chunk.hash);
+            if !chunk_file.exists() {
+                let mut out = File::create(chunk_file)?;
+                let data_in = BufReader::new(File::open(
+                    self.source_path.join(chunk.path.as_ref().unwrap()),
+                )?)
+                .bytes()
+                .skip(chunk.start as usize)
+                .take(chunk.size as usize)
+                .flatten()
+                .collect::<Vec<_>>();
+                out.write_all(&data_in)?;
+            }
+        }
+
+        Ok(())
+    }
+}
+
+pub struct Hydrator {
+    source_path: PathBuf,
+    pub cache: DedupCache,
+}
+
+impl Hydrator {
+    pub fn new(source_path: impl Into<PathBuf>, cache_path: impl Into<PathBuf>) -> Self {
+        let source_path = source_path.into();
+        let cache_path = cache_path.into();
+
+        let mut cache = DedupCache::new();
+        cache.read_from_file(&cache_path);
+
+        Self { source_path, cache }
+    }
+
+    pub fn restore_files(&self, target_path: impl Into<PathBuf>) {
+        let data_dir = self.source_path.join("data");
+        let target_path = target_path.into();
+        std::fs::create_dir_all(&target_path).unwrap();
+        for fwc in self.cache.iter() {
+            let target = target_path.join(&fwc.path);
+            std::fs::create_dir_all(&target.parent().unwrap()).unwrap();
+            let target_file = File::create(&target).unwrap();
+            let mut target = BufWriter::new(&target_file);
+            for chunk in fwc.get_chunks().unwrap() {
+                let mut source = File::open(data_dir.join(&chunk.hash)).unwrap();
+                std::io::copy(&mut source, &mut target).unwrap();
+            }
+            target.flush().unwrap();
+            target_file.set_modified(fwc.mtime).unwrap()
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use anyhow::Result;
     use assert_fs::prelude::*;
     use assert_fs::TempDir;
 
     use super::*;
 
     #[test]
-    fn dedup_empty_dir() -> Result<()> {
+    fn compare_filechunk_objects() -> anyhow::Result<()> {
         let temp = TempDir::new()?;
-        let source = temp.child("source");
-        source.create_dir_all()?;
 
-        let source_path = source.to_path_buf();
-        let dedup_tree = create_dedup_iter(&source_path)
-            .flatten()
-            .collect::<Vec<_>>();
-        let dedup_files = dedup_tree
-            .iter()
-            .filter_map(|d| {
-                if let DedupItem::File(f) = d {
-                    Some(f)
-                } else {
-                    None
-                }
-            })
-            .collect::<Vec<_>>();
+        let file_1 = temp.child("file_1");
+        std::fs::write(&file_1, "content_1")?;
 
-        // 0 files + 0 dirs
-        assert_eq!(dedup_tree.len(), 0);
-        assert_eq!(dedup_files.len(), 0);
+        let file_2 = temp.child("file_2");
+        std::fs::write(&file_2, "content_2")?;
 
-        Ok(())
-    }
+        let fwc_1 = FileWithChunks::try_new(&temp.path(), &file_1.path())?;
+        let fwc_1_same = FileWithChunks::try_new(&temp.path(), &file_1.path())?;
+        let fwc_2 = FileWithChunks::try_new(&temp.path(), &file_2.path())?;
 
-    #[test]
-    fn dedup_small_files() -> Result<()> {
-        let temp = TempDir::new()?;
-        let source = temp.child("source");
-        source.create_dir_all()?;
+        assert_eq!(fwc_1, fwc_1);
+        assert_eq!(fwc_1, fwc_1_same);
+        assert_ne!(fwc_1, fwc_2);
 
-        let file_1 = source.child("file-1");
-        let file_2 = source.child("file-2");
-        let file_3 = source.child("file-3");
+        File::open(&file_1)?.set_modified(SystemTime::now())?;
 
-        std::fs::write(&file_1, "content")?;
-        std::fs::write(&file_2, "content")?;
-        std::fs::write(&file_3, "another content")?;
+        let fwc_1_new = FileWithChunks::try_new(&temp.path(), &file_1.path())?;
 
-        let dedup_1 = DedupFile::new(file_1.to_path_buf())?;
-        let dedup_2 = DedupFile::new(file_2.to_path_buf())?;
-        let dedup_3 = DedupFile::new(file_3.to_path_buf())?;
-
-        assert_eq!(dedup_1.chunks.len(), 1);
-        assert_eq!(dedup_2.chunks.len(), 1);
-        assert_eq!(dedup_3.chunks.len(), 1);
-
-        assert_eq!(
-            dedup_1.chunks.get(0).unwrap().hash,
-            dedup_2.chunks.get(0).unwrap().hash
-        );
-
-        assert_ne!(
-            dedup_1.chunks.get(0).unwrap().hash,
-            dedup_3.chunks.get(0).unwrap().hash
-        );
-
-        Ok(())
-    }
-
-    #[test]
-    fn dedup_iter_tree() -> Result<()> {
-        let temp = TempDir::new()?;
-        let source = temp.child("source");
-        source.create_dir_all()?;
-
-        let file_1 = source.child("file-1");
-        let file_2 = {
-            let subdir = source.child("subdir-1");
-            subdir.create_dir_all()?;
-            subdir.child("file-2")
-        };
-        let file_3 = {
-            let subdir = source.child("subdir-2");
-            subdir.create_dir_all()?;
-            subdir.child("file-3")
-        };
-
-        let contents = "content";
-        std::fs::write(&file_1, contents)?;
-        std::fs::write(&file_2, contents)?;
-        std::fs::write(&file_3, contents)?;
-
-        let source_path = source.to_path_buf();
-        let dedup_tree = create_dedup_iter(&source_path)
-            .flatten()
-            .collect::<Vec<_>>();
-        let dedup_files = dedup_tree
-            .iter()
-            .filter_map(|d| {
-                if let DedupItem::File(f) = d {
-                    Some(f)
-                } else {
-                    None
-                }
-            })
-            .collect::<Vec<_>>();
-
-        // 3 files + 2 dirs
-        assert_eq!(dedup_tree.len(), 3 + 2);
-        assert_eq!(dedup_files.len(), 3);
-
-        let hashes = dedup_files
-            .iter()
-            .flat_map(|f| &f.chunks)
-            .map(|c| c.hash.clone())
-            .collect::<Vec<_>>();
-
-        assert_eq!(hashes.iter().max(), hashes.iter().min());
-
-        Ok(())
-    }
-
-    #[test]
-    fn hydrate_empty_dir() -> Result<()> {
-        let temp = TempDir::new()?;
-        let source = temp.child("source");
-        source.create_dir_all()?;
-
-        let source_path = source.to_path_buf();
-        let hydrate_tree = create_hydrate_iter(&source_path)
-            .flatten()
-            .collect::<Vec<_>>();
-        let hydrate_files = hydrate_tree
-            .iter()
-            .filter_map(|d| {
-                if let HydratedItem::File(f) = d {
-                    Some(f)
-                } else {
-                    None
-                }
-            })
-            .collect::<Vec<_>>();
-
-        // 0 files + 0 dirs
-        assert_eq!(hydrate_tree.len(), 0);
-        assert_eq!(hydrate_files.len(), 0);
-
-        Ok(())
-    }
-
-    #[test]
-    fn hydrate_iter_empty_files() -> Result<()> {
-        let temp = TempDir::new()?;
-        let source = temp.child("source");
-        let source_path = source.to_path_buf();
-        ensure_init(&source_path)?;
-
-        let source = source.child("tree");
-        source.child("file-1").touch()?;
-        source.child("file-2").touch()?;
-
-        let subdir = source.child("subdir");
-        subdir.create_dir_all()?;
-        subdir.child("file-3").touch()?;
-
-        let hydrate_tree = create_hydrate_iter(&source_path)
-            .flatten()
-            .collect::<Vec<_>>();
-        let hydrate_files = hydrate_tree
-            .iter()
-            .filter_map(|d| {
-                if let HydratedItem::File(f) = d {
-                    Some(f)
-                } else {
-                    None
-                }
-            })
-            .collect::<Vec<_>>();
-
-        // 3 files + 1 dirs
-        assert_eq!(hydrate_tree.len(), 4);
-        assert_eq!(hydrate_files.len(), 3);
-
-        Ok(())
-    }
-
-    #[test]
-    fn hydrate_iter_small_file() -> Result<()> {
-        let temp = TempDir::new()?;
-        let source = temp.child("source");
-        let source_path = source.to_path_buf();
-        ensure_init(&source_path)?;
-
-        let data = source.child("data");
-        data.create_dir_all()?;
-        let dummy_file = data.child("dummy");
-        dummy_file.touch()?;
-        let data_content = "content";
-        dummy_file.write_str(data_content)?;
-
-        let source = source.child("tree");
-        let file = source.child("file-1");
-        file.touch()?;
-        let dummy = "dummy";
-        let content = zstd::bulk::compress(dummy.as_bytes(), 0)?;
-        file.write_binary(&content)?;
-
-        let hydrate_tree = create_hydrate_iter(&source_path)
-            .flatten()
-            .collect::<Vec<_>>();
-        let hydrate_files = hydrate_tree
-            .iter()
-            .filter_map(|d| {
-                if let HydratedItem::File(f) = d {
-                    Some(f)
-                } else {
-                    None
-                }
-            })
-            .collect::<Vec<_>>();
-
-        // 3 files + 1 dirs
-        assert_eq!(hydrate_tree.len(), 1);
-        assert_eq!(hydrate_files.len(), 1);
-
-        let hydrated_file = &hydrate_files[0];
-        assert_eq!(hydrated_file.chunks.len(), 1);
-
-        let chunk = &hydrated_file.chunks[0];
-
-        assert_eq!(chunk.hash, dummy);
-        assert_eq!(chunk.size, data_content.as_bytes().len() as u64);
-
-        Ok(())
-    }
-
-    #[test]
-    fn hydrate_iter_big_file() -> Result<()> {
-        let temp = TempDir::new()?;
-        let source = temp.child("source");
-        let source_path = source.to_path_buf();
-        ensure_init(&source_path)?;
-
-        let data = source.child("data");
-        data.create_dir_all()?;
-        let dummy_file = data.child("dummy");
-        dummy_file.touch()?;
-        let data_content = "content";
-        dummy_file.write_str(data_content)?;
-
-        let source = source.child("tree");
-        let file = source.child("file-1");
-        file.touch()?;
-        let dummy = "dummy";
-        let content = zstd::bulk::compress(format!("{dummy}\n{dummy}").as_bytes(), 0)?;
-        file.write_binary(&content)?;
-
-        let hydrate_tree = create_hydrate_iter(&source_path)
-            .flatten()
-            .collect::<Vec<_>>();
-        let hydrate_files = hydrate_tree
-            .iter()
-            .filter_map(|d| {
-                if let HydratedItem::File(f) = d {
-                    Some(f)
-                } else {
-                    None
-                }
-            })
-            .collect::<Vec<_>>();
-
-        // 3 files + 1 dirs
-        assert_eq!(hydrate_tree.len(), 1);
-        assert_eq!(hydrate_files.len(), 1);
-
-        let hydrated_file = &hydrate_files[0];
-
-        assert_eq!(hydrated_file.chunks.len(), 2);
-
-        let chunk_1 = &hydrated_file.chunks[0];
-        let chunk_2 = &hydrated_file.chunks[1];
-
-        assert_eq!(chunk_1.hash, dummy);
-        assert_eq!(chunk_1.size, data_content.as_bytes().len() as u64);
-
-        assert_eq!(chunk_2.hash, dummy);
-        assert_eq!(chunk_2.size, data_content.as_bytes().len() as u64);
+        assert_ne!(fwc_1, fwc_1_new);
 
         Ok(())
     }
