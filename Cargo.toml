@@ -15,8 +15,10 @@ license = "MIT"
 anyhow = "1.0.75"
 base16ct = { version = "0.2.0", features = ["alloc"] }
 clap = { version = "4.4.8", features = ["derive"] }
+md-5 = "0.10.6"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+sha1 = "0.10.6"
 sha2 = "0.10.8"
 thiserror = "1.0.50"
 walkdir = "2.4.0"
