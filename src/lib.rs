@@ -139,6 +139,8 @@ impl FileWithChunks {
         let mut chunks = Vec::new();
         let size = path.metadata()?.len();
 
+        let mut hasher = Sha256::new();
+
         // Process file in MiB chunks.
         for start in (0..).take_while(|i| i * 1024 * 1024 < size) {
             let chunk = bytes
@@ -147,9 +149,8 @@ impl FileWithChunks {
                 .flatten()
                 .collect::<Vec<_>>();
 
-            let mut hasher = Sha256::new();
             hasher.update(&chunk);
-            let hash = hasher.finalize();
+            let hash = hasher.finalize_reset();
             let hash = base16ct::lower::encode_string(&hash);
 
             let file_chunk = FileChunk::new(start * 1024 * 1024, chunk.len() as u64, hash);
