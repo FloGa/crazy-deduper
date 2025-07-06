@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use anyhow::Result;
 use assert_fs::prelude::*;
 use assert_fs::TempDir;
-use crazy_deduper::Deduper;
+use crazy_deduper::{Deduper, HashingAlgorithm};
 
 #[test]
 fn check_public_properties() -> Result<()> {
@@ -17,7 +17,7 @@ fn check_public_properties() -> Result<()> {
     std::fs::write(&file, "content")?;
 
     let source_path = source.to_path_buf();
-    let mut deduper = Deduper::new(source_path, cache_file.path());
+    let mut deduper = Deduper::new(source_path, cache_file.path(), HashingAlgorithm::MD5);
 
     let cache = &mut deduper.cache;
     assert_eq!(cache.len(), 1, "Expected file count is not 1");
