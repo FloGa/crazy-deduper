@@ -7,7 +7,6 @@ use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use thiserror::Error;
 use walkdir::WalkDir;
 
@@ -74,6 +73,25 @@ where
     }
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+pub enum HashingAlgorithm {
+    MD5,
+    SHA1,
+    SHA256,
+    SHA512,
+}
+
+impl HashingAlgorithm {
+    fn select_hasher(&self) -> Box<dyn sha2::digest::DynDigest> {
+        match self {
+            Self::MD5 => Box::new(md5::Md5::default()),
+            Self::SHA1 => Box::new(sha1::Sha1::default()),
+            Self::SHA256 => Box::new(sha2::Sha256::default()),
+            Self::SHA512 => Box::new(sha2::Sha512::default()),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct FileWithChunks {
     base: PathBuf,
@@ -81,6 +99,7 @@ pub struct FileWithChunks {
     pub size: u64,
     pub mtime: SystemTime,
     chunks: LazyOption<Vec<FileChunk>>,
+    hashing_algorithm: HashingAlgorithm,
 }
 
 impl PartialEq for FileWithChunks {
@@ -92,7 +111,11 @@ impl PartialEq for FileWithChunks {
 impl Eq for FileWithChunks {}
 
 impl FileWithChunks {
-    pub fn try_new(source_path: impl Into<PathBuf>, path: impl Into<PathBuf>) -> Result<Self> {
+    pub fn try_new(
+        source_path: impl Into<PathBuf>,
+        path: impl Into<PathBuf>,
+        hashing_algorithm: HashingAlgorithm,
+    ) -> Result<Self> {
         let base = source_path.into();
 
         let path = path.into();
@@ -112,6 +135,7 @@ impl FileWithChunks {
             size,
             mtime,
             chunks: Default::default(),
+            hashing_algorithm,
         })
     }
 
@@ -139,6 +163,8 @@ impl FileWithChunks {
         let mut chunks = Vec::new();
         let size = path.metadata()?.len();
 
+        let mut hasher = self.hashing_algorithm.select_hasher();
+
         // Process file in MiB chunks.
         for start in (0..).take_while(|i| i * 1024 * 1024 < size) {
             let chunk = bytes
@@ -147,9 +173,8 @@ impl FileWithChunks {
                 .flatten()
                 .collect::<Vec<_>>();
 
-            let mut hasher = Sha256::new();
             hasher.update(&chunk);
-            let hash = hasher.finalize();
+            let hash = hasher.finalize_reset();
             let hash = base16ct::lower::encode_string(&hash);
 
             let file_chunk = FileChunk::new(start * 1024 * 1024, chunk.len() as u64, hash);
@@ -261,7 +286,11 @@ pub struct Deduper {
 }
 
 impl Deduper {
-    pub fn new(source_path: impl Into<PathBuf>, cache_path: impl Into<PathBuf>) -> Self {
+    pub fn new(
+        source_path: impl Into<PathBuf>,
+        cache_path: impl Into<PathBuf>,
+        hashing_algorithm: HashingAlgorithm,
+    ) -> Self {
         let source_path = source_path.into();
         let cache_path = cache_path.into();
 
@@ -279,7 +308,7 @@ impl Deduper {
                 continue;
             }
 
-            let fwc = FileWithChunks::try_new(&source_path, &entry).unwrap();
+            let fwc = FileWithChunks::try_new(&source_path, &entry, hashing_algorithm).unwrap();
 
             if let Some(fwc_cache) = cache.get(&fwc.path) {
                 if fwc == *fwc_cache {
@@ -371,7 +400,7 @@ impl Hydrator {
 #[cfg(test)]
 mod tests {
     use assert_fs::prelude::*;
-    use assert_fs::TempDir;
+    use assert_fs::{NamedTempFile, TempDir};
 
     use super::*;
 
@@ -385,9 +414,10 @@ mod tests {
         let file_2 = temp.child("file_2");
         std::fs::write(&file_2, "content_2")?;
 
-        let fwc_1 = FileWithChunks::try_new(&temp.path(), &file_1.path())?;
-        let fwc_1_same = FileWithChunks::try_new(&temp.path(), &file_1.path())?;
-        let fwc_2 = FileWithChunks::try_new(&temp.path(), &file_2.path())?;
+        let fwc_1 = FileWithChunks::try_new(&temp.path(), &file_1.path(), HashingAlgorithm::MD5)?;
+        let fwc_1_same =
+            FileWithChunks::try_new(&temp.path(), &file_1.path(), HashingAlgorithm::MD5)?;
+        let fwc_2 = FileWithChunks::try_new(&temp.path(), &file_2.path(), HashingAlgorithm::MD5)?;
 
         assert_eq!(fwc_1, fwc_1);
         assert_eq!(fwc_1, fwc_1_same);
@@ -395,9 +425,50 @@ mod tests {
 
         File::open(&file_1)?.set_modified(SystemTime::now())?;
 
-        let fwc_1_new = FileWithChunks::try_new(&temp.path(), &file_1.path())?;
+        let fwc_1_new =
+            FileWithChunks::try_new(&temp.path(), &file_1.path(), HashingAlgorithm::MD5)?;
 
         assert_ne!(fwc_1, fwc_1_new);
+
+        Ok(())
+    }
+
+    #[test]
+    fn check_all_hashing_algorithms() -> anyhow::Result<()> {
+        let algorithms = &[
+            (HashingAlgorithm::MD5, "0fb073cd346f46f60c15e719f3820482"),
+            (
+                HashingAlgorithm::SHA1,
+                "5503f5edc1bba66a7733c5ec38f4e9d449021be9",
+            ),
+            (
+                HashingAlgorithm::SHA256,
+                "e8c73ac958a87f17906b092bd99f37038788ee23b271574aad6d5bf1c76cc61c",
+            ),
+            (HashingAlgorithm::SHA512, "e6eda213df25f96ca380dd07640df530574e380c1b93d5d863fec05d5908a4880a3075fef4a438cfb1023cc51affb4624002f54b4790fe8362c7de032eb39aaa"),
+        ];
+
+        let temp = TempDir::new()?;
+        let file = temp.child("file");
+        std::fs::write(&file, "hello rust")?;
+
+        for (algorithm, expected_hash) in algorithms.iter().copied() {
+            let cache_file = NamedTempFile::new("cache.json")?;
+
+            let chunks = Deduper::new(temp.path(), cache_file.path(), algorithm)
+                .cache
+                .get_chunks()?
+                .collect::<Vec<_>>();
+
+            assert_eq!(chunks.len(), 1, "Too many chunks");
+
+            let (hash, _, _) = &chunks[0];
+            assert_eq!(
+                hash, &expected_hash,
+                "Algorithm {:?} does not produce expected hash",
+                algorithm
+            );
+        }
 
         Ok(())
     }

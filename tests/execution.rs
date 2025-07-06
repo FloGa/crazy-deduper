@@ -34,6 +34,8 @@ fn fixture_with_cache_file(
         .arg(path_dedup.path())
         .arg("--cache-file")
         .arg(cache_file.as_path())
+        .arg("--hashing-algorithm")
+        .arg("sha256")
         .assert()
         .success();
 
