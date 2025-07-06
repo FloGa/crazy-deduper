@@ -94,6 +94,7 @@ impl HashingAlgorithm {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct FileWithChunks {
+    #[serde(skip)]
     base: PathBuf,
     pub path: String,
     pub size: u64,
