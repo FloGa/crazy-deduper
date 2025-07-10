@@ -263,6 +263,10 @@ impl DedupCache {
         self.0.get(path)
     }
 
+    pub fn get_mut(&mut self, path: &str) -> Option<&mut FileWithChunks> {
+        self.0.get_mut(path)
+    }
+
     fn insert(&mut self, path: String, fwc: FileWithChunks) {
         self.0.insert(path, fwc);
     }
@@ -311,8 +315,9 @@ impl Deduper {
 
             let fwc = FileWithChunks::try_new(&source_path, &entry, hashing_algorithm).unwrap();
 
-            if let Some(fwc_cache) = cache.get(&fwc.path) {
+            if let Some(fwc_cache) = cache.get_mut(&fwc.path) {
                 if fwc == *fwc_cache {
+                    fwc_cache.base = source_path.clone();
                     continue;
                 }
             }
