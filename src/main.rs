@@ -13,9 +13,13 @@ struct Cli {
     /// Target directory
     target: PathBuf,
 
-    /// Path to cache file
+    /// Path to cache files
+    ///
+    /// The files are read in reverse order, so they should be sorted with the most accurate ones
+    /// in the beginning. The first given will be written.
     #[arg(long)]
-    cache_file: PathBuf,
+    #[arg(alias = "cache-file")]
+    cache_files: Vec<PathBuf>,
 
     /// Hashing algorithm to use for chunk filenames
     #[arg(long, value_enum, default_value_t = HashingAlgorithmArgument::SHA1)]
@@ -50,14 +54,14 @@ fn main() -> Result<()> {
 
     let source = args.source;
     let target = args.target;
-    let cache_file = args.cache_file;
+    let cache_files = args.cache_files;
 
     if !args.decode {
-        let mut deduper = Deduper::new(source, cache_file, args.hashing_algorithm.into());
+        let mut deduper = Deduper::new(source, cache_files, args.hashing_algorithm.into());
         deduper.write_chunks(target)?;
         deduper.write_cache();
     } else {
-        let hydrator = Hydrator::new(source, cache_file);
+        let hydrator = Hydrator::new(source, cache_files);
         hydrator.restore_files(target);
     }
 

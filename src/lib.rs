@@ -293,14 +293,21 @@ pub struct Deduper {
 impl Deduper {
     pub fn new(
         source_path: impl Into<PathBuf>,
-        cache_path: impl Into<PathBuf>,
+        cache_paths: Vec<impl Into<PathBuf>>,
         hashing_algorithm: HashingAlgorithm,
     ) -> Self {
         let source_path = source_path.into();
-        let cache_path = cache_path.into();
 
         let mut cache = DedupCache::new();
-        cache.read_from_file(&cache_path);
+
+        let cache_path = {
+            let mut cache_path = Default::default();
+            for cache_path_from_iter in cache_paths.into_iter().rev() {
+                cache_path = cache_path_from_iter.into();
+                cache.read_from_file(&cache_path);
+            }
+            cache_path
+        };
 
         let dir_walker = WalkDir::new(&source_path)
             .min_depth(1)
@@ -374,12 +381,15 @@ pub struct Hydrator {
 }
 
 impl Hydrator {
-    pub fn new(source_path: impl Into<PathBuf>, cache_path: impl Into<PathBuf>) -> Self {
+    pub fn new(source_path: impl Into<PathBuf>, cache_paths: Vec<impl Into<PathBuf>>) -> Self {
         let source_path = source_path.into();
-        let cache_path = cache_path.into();
 
         let mut cache = DedupCache::new();
-        cache.read_from_file(&cache_path);
+
+        for cache_path in cache_paths.into_iter().rev() {
+            let cache_path = cache_path.into();
+            cache.read_from_file(&cache_path);
+        }
 
         Self { source_path, cache }
     }
@@ -461,7 +471,7 @@ mod tests {
         for (algorithm, expected_hash) in algorithms.iter().copied() {
             let cache_file = NamedTempFile::new("cache.json")?;
 
-            let chunks = Deduper::new(temp.path(), cache_file.path(), algorithm)
+            let chunks = Deduper::new(temp.path(), vec![cache_file.path()], algorithm)
                 .cache
                 .get_chunks()?
                 .collect::<Vec<_>>();
