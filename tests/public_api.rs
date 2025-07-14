@@ -17,7 +17,12 @@ fn check_public_properties() -> Result<()> {
     std::fs::write(&file, "content")?;
 
     let source_path = source.to_path_buf();
-    let mut deduper = Deduper::new(source_path, vec![cache_file.path()], HashingAlgorithm::MD5);
+    let mut deduper = Deduper::new(
+        source_path,
+        vec![cache_file.path()],
+        HashingAlgorithm::MD5,
+        true,
+    );
 
     let cache = &mut deduper.cache;
     assert_eq!(cache.len(), 1, "Expected file count is not 1");

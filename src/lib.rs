@@ -295,6 +295,7 @@ impl Deduper {
         source_path: impl Into<PathBuf>,
         cache_paths: Vec<impl Into<PathBuf>>,
         hashing_algorithm: HashingAlgorithm,
+        same_file_system: bool,
     ) -> Self {
         let source_path = source_path.into();
 
@@ -311,7 +312,7 @@ impl Deduper {
 
         let dir_walker = WalkDir::new(&source_path)
             .min_depth(1)
-            .same_file_system(true);
+            .same_file_system(same_file_system);
 
         for entry in dir_walker {
             let entry = entry.unwrap().into_path();
@@ -471,7 +472,7 @@ mod tests {
         for (algorithm, expected_hash) in algorithms.iter().copied() {
             let cache_file = NamedTempFile::new("cache.json")?;
 
-            let chunks = Deduper::new(temp.path(), vec![cache_file.path()], algorithm)
+            let chunks = Deduper::new(temp.path(), vec![cache_file.path()], algorithm, true)
                 .cache
                 .get_chunks()?
                 .collect::<Vec<_>>();

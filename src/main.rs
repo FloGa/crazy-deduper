@@ -25,6 +25,10 @@ struct Cli {
     #[arg(long, value_enum, default_value_t = HashingAlgorithmArgument::SHA1)]
     hashing_algorithm: HashingAlgorithmArgument,
 
+    /// Limit file listing to same file system
+    #[arg(long)]
+    same_file_system: bool,
+
     /// Invert behavior, restore tree from deduplicated data
     #[arg(long, short, visible_alias = "hydrate")]
     decode: bool,
@@ -55,9 +59,15 @@ fn main() -> Result<()> {
     let source = args.source;
     let target = args.target;
     let cache_files = args.cache_files;
+    let same_file_system = args.same_file_system;
 
     if !args.decode {
-        let mut deduper = Deduper::new(source, cache_files, args.hashing_algorithm.into());
+        let mut deduper = Deduper::new(
+            source,
+            cache_files,
+            args.hashing_algorithm.into(),
+            same_file_system,
+        );
         deduper.write_chunks(target)?;
         deduper.write_cache();
     } else {
