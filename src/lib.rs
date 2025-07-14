@@ -1,11 +1,12 @@
 use std::cell::OnceCell;
 use std::collections::HashMap;
 use std::fs::File;
-use std::io::{BufReader, BufWriter, Read, Write};
+use std::io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use walkdir::WalkDir;
@@ -158,32 +159,33 @@ impl FileWithChunks {
     fn calculate_chunks(&self) -> Result<Vec<FileChunk>> {
         let path = self.base.join(&self.path);
 
-        let input = BufReader::new(File::open(&path)?);
-        let mut bytes = input.bytes();
-
-        let mut chunks = Vec::new();
         let size = path.metadata()?.len();
 
-        let mut hasher = self.hashing_algorithm.select_hasher();
+        let hashing_algorithm = self.hashing_algorithm;
 
         // Process file in MiB chunks.
-        for start in (0..).take_while(|i| i * 1024 * 1024 < size) {
-            let chunk = bytes
-                .by_ref()
-                .take(1024 * 1024)
-                .flatten()
-                .collect::<Vec<_>>();
+        let chunk_size = 1024 * 1024;
+        (0..(size + chunk_size - 1) / chunk_size)
+            .into_par_iter()
+            .map(|start| {
+                let mut input = BufReader::new(File::open(&path)?);
+                input.seek(SeekFrom::Start(start * chunk_size)).unwrap();
 
-            hasher.update(&chunk);
-            let hash = hasher.finalize_reset();
-            let hash = base16ct::lower::encode_string(&hash);
+                let chunk = input
+                    .bytes()
+                    .by_ref()
+                    .take(chunk_size as usize)
+                    .flatten()
+                    .collect::<Vec<_>>();
 
-            let file_chunk = FileChunk::new(start * 1024 * 1024, chunk.len() as u64, hash);
+                let mut hasher = hashing_algorithm.select_hasher();
+                hasher.update(&chunk);
+                let hash = hasher.finalize();
+                let hash = base16ct::lower::encode_string(&hash);
 
-            chunks.push(file_chunk);
-        }
-
-        Ok(chunks)
+                Ok::<FileChunk, Error>(FileChunk::new(start * chunk_size, chunk.len() as u64, hash))
+            })
+            .collect()
     }
 }
 
