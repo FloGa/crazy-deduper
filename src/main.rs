@@ -29,6 +29,10 @@ struct Cli {
     #[arg(long)]
     same_file_system: bool,
 
+    /// Declutter files into this many subdirectory levels
+    #[arg(long, default_value_t = 0)]
+    declutter_levels: usize,
+
     /// Invert behavior, restore tree from deduplicated data
     #[arg(long, short, visible_alias = "hydrate")]
     decode: bool,
@@ -60,6 +64,7 @@ fn main() -> Result<()> {
     let target = args.target;
     let cache_files = args.cache_files;
     let same_file_system = args.same_file_system;
+    let declutter_levels = args.declutter_levels;
 
     if !args.decode {
         let mut deduper = Deduper::new(
@@ -68,11 +73,11 @@ fn main() -> Result<()> {
             args.hashing_algorithm.into(),
             same_file_system,
         );
-        deduper.write_chunks(target)?;
+        deduper.write_chunks(target, declutter_levels)?;
         deduper.write_cache();
     } else {
         let hydrator = Hydrator::new(source, cache_files);
-        hydrator.restore_files(target);
+        hydrator.restore_files(target, declutter_levels);
     }
 
     Ok(())
