@@ -294,6 +294,10 @@ fn modified_files_same_cache() -> Result<()> {
     fixture_with_cache_file(setup_origin_2, check_dedup, cache_file.to_path_buf())?;
     fixture_with_cache_file(setup_origin_12, check_dedup, cache_file.to_path_buf())?;
 
+    let cache_file = TempDir::new()?.child("cache.json.zst");
+
+    fixture_with_cache_file(setup_origin_1, check_dedup, cache_file.to_path_buf())?;
+
     Ok(())
 }
 
