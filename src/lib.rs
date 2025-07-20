@@ -230,11 +230,21 @@ impl DedupCache {
     }
 
     fn read_from_file(&mut self, path: impl AsRef<Path>) {
-        let cache_from_file: Vec<FileWithChunks> = File::open(path)
-            .map(BufReader::new)
-            .map(|reader| serde_json::from_reader(reader))
-            .map(|result| result.unwrap())
-            .unwrap_or_default();
+        let reader = File::open(&path).map(BufReader::new);
+
+        let cache_from_file: Vec<FileWithChunks> =
+            if path.as_ref().extension() == Some("zst".as_ref()) {
+                reader
+                    .and_then(zstd::Decoder::with_buffer)
+                    .map(|reader| serde_json::from_reader(reader))
+                    .map(|result| result.unwrap())
+                    .unwrap_or_default()
+            } else {
+                reader
+                    .map(|reader| serde_json::from_reader(reader))
+                    .map(|result| result.unwrap())
+                    .unwrap_or_default()
+            };
 
         for x in cache_from_file {
             self.insert(x.path.clone(), x);
@@ -243,11 +253,21 @@ impl DedupCache {
 
     fn write_to_file(&self, path: impl AsRef<Path>) {
         std::fs::create_dir_all(path.as_ref().parent().unwrap()).unwrap();
-        File::create(path)
-            .map(BufWriter::new)
-            .map(|writer| serde_json::to_writer(writer, &self.iter().collect::<Vec<_>>()))
-            .unwrap()
-            .unwrap();
+        let writer = File::create(&path).map(BufWriter::new);
+
+        if path.as_ref().extension() == Some("zst".as_ref()) {
+            writer
+                .and_then(|writer| zstd::Encoder::new(writer, 0))
+                .map(|encoder| encoder.auto_finish())
+                .map(|writer| serde_json::to_writer(writer, &self.iter().collect::<Vec<_>>()))
+                .unwrap()
+                .unwrap();
+        } else {
+            writer
+                .map(|writer| serde_json::to_writer(writer, &self.iter().collect::<Vec<_>>()))
+                .unwrap()
+                .unwrap();
+        }
     }
 
     pub fn get_chunks(&self) -> Result<impl Iterator<Item = (String, FileChunk, bool)> + '_> {
