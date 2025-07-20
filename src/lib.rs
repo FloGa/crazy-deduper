@@ -259,19 +259,19 @@ impl DedupCache {
             writer
                 .and_then(|writer| zstd::Encoder::new(writer, 0))
                 .map(|encoder| encoder.auto_finish())
-                .map(|writer| serde_json::to_writer(writer, &self.iter().collect::<Vec<_>>()))
+                .map(|writer| serde_json::to_writer(writer, &self.values().collect::<Vec<_>>()))
                 .unwrap()
                 .unwrap();
         } else {
             writer
-                .map(|writer| serde_json::to_writer(writer, &self.iter().collect::<Vec<_>>()))
+                .map(|writer| serde_json::to_writer(writer, &self.values().collect::<Vec<_>>()))
                 .unwrap()
                 .unwrap();
         }
     }
 
     pub fn get_chunks(&self) -> Result<impl Iterator<Item = (String, FileChunk, bool)> + '_> {
-        Ok(self.iter().flat_map(|fwc| {
+        Ok(self.values().flat_map(|fwc| {
             let mut dirty = fwc.get_chunks().is_none();
 
             fwc.get_or_calculate_chunks()
@@ -310,7 +310,7 @@ impl DedupCache {
         self.0.contains_key(path)
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = &FileWithChunks> {
+    pub fn values(&self) -> impl Iterator<Item = &FileWithChunks> {
         self.0.values()
     }
 
@@ -449,7 +449,7 @@ impl Hydrator {
         let data_dir = self.source_path.join("data");
         let target_path = target_path.into();
         std::fs::create_dir_all(&target_path).unwrap();
-        for fwc in self.cache.iter() {
+        for fwc in self.cache.values() {
             let target = target_path.join(&fwc.path);
             std::fs::create_dir_all(&target.parent().unwrap()).unwrap();
             let target_file = File::create(&target).unwrap();
