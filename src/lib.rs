@@ -1,4 +1,5 @@
 use std::cell::OnceCell;
+use std::collections::hash_map::IntoIter;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write};
@@ -312,6 +313,10 @@ impl DedupCache {
 
     pub fn contains_key(&self, path: &str) -> bool {
         self.0.contains_key(path)
+    }
+
+    pub fn into_iter(self) -> IntoIter<String, FileWithChunks> {
+        self.0.into_iter()
     }
 
     pub fn values(&self) -> impl Iterator<Item = &FileWithChunks> {
