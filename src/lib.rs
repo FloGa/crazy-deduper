@@ -354,6 +354,13 @@ impl Deduper {
             cache_path
         };
 
+        cache = DedupCache::from_hashmap(
+            cache
+                .into_iter()
+                .filter(|(path, _)| source_path.join(path).exists())
+                .collect(),
+        );
+
         let dir_walker = WalkDir::new(&source_path)
             .min_depth(1)
             .same_file_system(same_file_system);
