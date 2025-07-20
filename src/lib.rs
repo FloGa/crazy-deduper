@@ -357,11 +357,16 @@ impl Deduper {
 
     pub fn write_cache(&self) {
         let temp_path = self.cache_path.clone().with_extension(format!(
-            "tmp.{}",
+            "tmp.{}.{}",
             SystemTime::now()
                 .duration_since(SystemTime::UNIX_EPOCH)
                 .unwrap()
-                .as_millis()
+                .as_millis(),
+            self.cache_path
+                .extension()
+                .unwrap_or("ext".as_ref())
+                .to_str()
+                .unwrap()
         ));
         self.cache.write_to_file(&temp_path);
         std::fs::rename(temp_path, &self.cache_path).unwrap();
