@@ -229,6 +229,10 @@ impl DedupCache {
         Self(HashMap::new())
     }
 
+    fn from_hashmap(hash_map: HashMap<String, FileWithChunks>) -> DedupCache {
+        DedupCache(hash_map)
+    }
+
     fn read_from_file(&mut self, path: impl AsRef<Path>) {
         let reader = File::open(&path).map(BufReader::new);
 
