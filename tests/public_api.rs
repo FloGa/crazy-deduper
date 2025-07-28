@@ -27,7 +27,7 @@ fn check_public_properties() -> Result<()> {
     let cache = &mut deduper.cache;
     assert_eq!(cache.len(), 1, "Expected file count is not 1");
 
-    let fcw = cache.iter().next().unwrap();
+    let fcw = cache.values().next().unwrap();
     assert_eq!(PathBuf::from(&fcw.path), file.strip_prefix(&source)?);
 
     let chunks = fcw.get_or_calculate_chunks().unwrap();

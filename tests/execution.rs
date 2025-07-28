@@ -302,6 +302,32 @@ fn modified_files_same_cache() -> Result<()> {
 }
 
 #[test]
+fn multiple_unrelated_sources_with_same_cache() -> Result<()> {
+    fn setup_origin_1(path_origin: &ChildPath) -> Result<()> {
+        let child = path_origin.child("file-1");
+        fs::write(&child, "1")?;
+        Ok(())
+    }
+
+    fn setup_origin_2(path_origin: &ChildPath) -> Result<()> {
+        let child = path_origin.child("file-2");
+        fs::write(&child, "2")?;
+        Ok(())
+    }
+
+    fn check_dedup(_path_dedup: &ChildPath) -> Result<()> {
+        Ok(())
+    }
+
+    let cache_file = TempDir::new()?.child("cache.json");
+
+    fixture_with_cache_file(setup_origin_1, check_dedup, cache_file.to_path_buf())?;
+    fixture_with_cache_file(setup_origin_2, check_dedup, cache_file.to_path_buf())?;
+
+    Ok(())
+}
+
+#[test]
 fn file_declutter() -> Result<()> {
     fn setup_origin(path_origin: &ChildPath) -> Result<()> {
         path_origin.child("empty").touch()?;

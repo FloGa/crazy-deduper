@@ -1,4 +1,5 @@
 use std::cell::OnceCell;
+use std::collections::hash_map::IntoIter;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write};
@@ -229,6 +230,10 @@ impl DedupCache {
         Self(HashMap::new())
     }
 
+    fn from_hashmap(hash_map: HashMap<String, FileWithChunks>) -> DedupCache {
+        DedupCache(hash_map)
+    }
+
     fn read_from_file(&mut self, path: impl AsRef<Path>) {
         let reader = File::open(&path).map(BufReader::new);
 
@@ -259,19 +264,19 @@ impl DedupCache {
             writer
                 .and_then(|writer| zstd::Encoder::new(writer, 0))
                 .map(|encoder| encoder.auto_finish())
-                .map(|writer| serde_json::to_writer(writer, &self.iter().collect::<Vec<_>>()))
+                .map(|writer| serde_json::to_writer(writer, &self.values().collect::<Vec<_>>()))
                 .unwrap()
                 .unwrap();
         } else {
             writer
-                .map(|writer| serde_json::to_writer(writer, &self.iter().collect::<Vec<_>>()))
+                .map(|writer| serde_json::to_writer(writer, &self.values().collect::<Vec<_>>()))
                 .unwrap()
                 .unwrap();
         }
     }
 
     pub fn get_chunks(&self) -> Result<impl Iterator<Item = (String, FileChunk, bool)> + '_> {
-        Ok(self.iter().flat_map(|fwc| {
+        Ok(self.values().flat_map(|fwc| {
             let mut dirty = fwc.get_chunks().is_none();
 
             fwc.get_or_calculate_chunks()
@@ -310,7 +315,11 @@ impl DedupCache {
         self.0.contains_key(path)
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = &FileWithChunks> {
+    pub fn into_iter(self) -> IntoIter<String, FileWithChunks> {
+        self.0.into_iter()
+    }
+
+    pub fn values(&self) -> impl Iterator<Item = &FileWithChunks> {
         self.0.values()
     }
 
@@ -344,6 +353,13 @@ impl Deduper {
             }
             cache_path
         };
+
+        cache = DedupCache::from_hashmap(
+            cache
+                .into_iter()
+                .filter(|(path, _)| source_path.join(path).exists())
+                .collect(),
+        );
 
         let dir_walker = WalkDir::new(&source_path)
             .min_depth(1)
@@ -449,7 +465,7 @@ impl Hydrator {
         let data_dir = self.source_path.join("data");
         let target_path = target_path.into();
         std::fs::create_dir_all(&target_path).unwrap();
-        for fwc in self.cache.iter() {
+        for fwc in self.cache.values() {
             let target = target_path.join(&fwc.path);
             std::fs::create_dir_all(&target.parent().unwrap()).unwrap();
             let target_file = File::create(&target).unwrap();
