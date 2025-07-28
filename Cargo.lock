@@ -219,6 +219,7 @@ dependencies = [
  "assert_fs",
  "base16ct",
  "clap",
+ "file-declutter",
  "lazy_static",
  "md-5",
  "predicates",
@@ -310,6 +311,17 @@ name = "fastrand"
 version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "25cbce373ec4653f1a01a31e8a5e5ec0c622dc27ff9c4e6606eefef5cbbed4a5"
+
+[[package]]
+name = "file-declutter"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ff90b11267b27c9351bf51b89753a1e0d41d5b6172dd8040150f86d395123f4c"
+dependencies = [
+ "anyhow",
+ "clap",
+ "walkdir",
+]
 
 [[package]]
 name = "float-cmp"

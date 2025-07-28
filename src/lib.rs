@@ -6,6 +6,7 @@ use std::ops::Deref;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
+use file_declutter::FileDeclutter;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -165,27 +166,39 @@ impl FileWithChunks {
 
         // Process file in MiB chunks.
         let chunk_size = 1024 * 1024;
-        (0..(size + chunk_size - 1) / chunk_size)
-            .into_par_iter()
-            .map(|start| {
-                let mut input = BufReader::new(File::open(&path)?);
-                input.seek(SeekFrom::Start(start * chunk_size)).unwrap();
+        if size == 0 {
+            let hasher = hashing_algorithm.select_hasher();
+            let hash = hasher.finalize();
+            let hash = base16ct::lower::encode_string(&hash);
 
-                let chunk = input
-                    .bytes()
-                    .by_ref()
-                    .take(chunk_size as usize)
-                    .flatten()
-                    .collect::<Vec<_>>();
+            std::iter::once(Ok::<FileChunk, Error>(FileChunk::new(0, 0, hash))).collect()
+        } else {
+            (0..(size + chunk_size - 1) / chunk_size)
+                .into_par_iter()
+                .map(|start| {
+                    let mut input = BufReader::new(File::open(&path)?);
+                    input.seek(SeekFrom::Start(start * chunk_size)).unwrap();
 
-                let mut hasher = hashing_algorithm.select_hasher();
-                hasher.update(&chunk);
-                let hash = hasher.finalize();
-                let hash = base16ct::lower::encode_string(&hash);
+                    let chunk = input
+                        .bytes()
+                        .by_ref()
+                        .take(chunk_size as usize)
+                        .flatten()
+                        .collect::<Vec<_>>();
 
-                Ok::<FileChunk, Error>(FileChunk::new(start * chunk_size, chunk.len() as u64, hash))
-            })
-            .collect()
+                    let mut hasher = hashing_algorithm.select_hasher();
+                    hasher.update(&chunk);
+                    let hash = hasher.finalize();
+                    let hash = base16ct::lower::encode_string(&hash);
+
+                    Ok::<FileChunk, Error>(FileChunk::new(
+                        start * chunk_size,
+                        chunk.len() as u64,
+                        hash,
+                    ))
+                })
+                .collect()
+        }
     }
 }
 
@@ -354,13 +367,23 @@ impl Deduper {
         std::fs::rename(temp_path, &self.cache_path).unwrap();
     }
 
-    pub fn write_chunks(&mut self, target_path: impl Into<PathBuf>) -> Result<()> {
+    pub fn write_chunks(
+        &mut self,
+        target_path: impl Into<PathBuf>,
+        declutter_levels: usize,
+    ) -> Result<()> {
         let target_path = target_path.into();
         let data_dir = target_path.join("data");
         std::fs::create_dir_all(&data_dir)?;
         for (_, chunk, _) in self.cache.get_chunks()? {
-            let chunk_file = data_dir.join(&chunk.hash);
+            let mut chunk_file = PathBuf::from(&chunk.hash);
+            if declutter_levels > 0 {
+                chunk_file = FileDeclutter::oneshot(chunk_file, declutter_levels);
+            }
+            chunk_file = data_dir.join(chunk_file);
+
             if !chunk_file.exists() {
+                std::fs::create_dir_all(&chunk_file.parent().unwrap())?;
                 let mut out = File::create(chunk_file)?;
                 let data_in = BufReader::new(File::open(
                     self.source_path.join(chunk.path.as_ref().unwrap()),
@@ -397,7 +420,7 @@ impl Hydrator {
         Self { source_path, cache }
     }
 
-    pub fn restore_files(&self, target_path: impl Into<PathBuf>) {
+    pub fn restore_files(&self, target_path: impl Into<PathBuf>, declutter_levels: usize) {
         let data_dir = self.source_path.join("data");
         let target_path = target_path.into();
         std::fs::create_dir_all(&target_path).unwrap();
@@ -407,7 +430,13 @@ impl Hydrator {
             let target_file = File::create(&target).unwrap();
             let mut target = BufWriter::new(&target_file);
             for chunk in fwc.get_chunks().unwrap() {
-                let mut source = File::open(data_dir.join(&chunk.hash)).unwrap();
+                let mut chunk_file = PathBuf::from(&chunk.hash);
+                if declutter_levels > 0 {
+                    chunk_file = FileDeclutter::oneshot(chunk_file, declutter_levels);
+                }
+                chunk_file = data_dir.join(chunk_file);
+
+                let mut source = File::open(chunk_file).unwrap();
                 std::io::copy(&mut source, &mut target).unwrap();
             }
             target.flush().unwrap();
