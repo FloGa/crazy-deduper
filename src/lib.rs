@@ -15,23 +15,8 @@ use walkdir::WalkDir;
 
 #[derive(Debug, Error)]
 pub enum Error {
-    #[error("'{0}' already exists!")]
-    AlreadyExists(PathBuf),
-
-    #[error("'{0}' not properly initialized")]
-    NotInitialized(PathBuf),
-
     #[error(transparent)]
     Io(#[from] std::io::Error),
-
-    #[error(transparent)]
-    Walkdir(#[from] walkdir::Error),
-
-    #[error(transparent)]
-    Utf8(#[from] std::string::FromUtf8Error),
-
-    #[error(transparent)]
-    SerdeJson(#[from] serde_json::Error),
 }
 
 type Result<R> = std::result::Result<R, Error>;
