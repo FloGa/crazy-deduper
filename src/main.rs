@@ -13,13 +13,12 @@ struct Cli {
     /// Target directory
     target: PathBuf,
 
-    /// Path to cache files
+    /// Path to cache file
     ///
-    /// The files are read in reverse order, so they should be sorted with the most accurate ones
-    /// in the beginning. The first given will be written.
+    /// Can be used multiple times. The files are read in reverse order, so they should be sorted
+    /// with the most accurate ones in the beginning. The first given will be written.
     #[arg(long)]
-    #[arg(alias = "cache-file")]
-    cache_files: Vec<PathBuf>,
+    cache_file: Vec<PathBuf>,
 
     /// Hashing algorithm to use for chunk filenames
     #[arg(long, value_enum, default_value_t = HashingAlgorithmArgument::SHA1)]
@@ -62,7 +61,7 @@ fn main() -> Result<()> {
 
     let source = args.source;
     let target = args.target;
-    let cache_files = args.cache_files;
+    let cache_files = args.cache_file;
     let same_file_system = args.same_file_system;
     let declutter_levels = args.declutter_levels;
 
