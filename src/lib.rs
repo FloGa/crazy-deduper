@@ -519,7 +519,10 @@ mod tests {
                 HashingAlgorithm::SHA256,
                 "e8c73ac958a87f17906b092bd99f37038788ee23b271574aad6d5bf1c76cc61c",
             ),
-            (HashingAlgorithm::SHA512, "e6eda213df25f96ca380dd07640df530574e380c1b93d5d863fec05d5908a4880a3075fef4a438cfb1023cc51affb4624002f54b4790fe8362c7de032eb39aaa"),
+            (
+                HashingAlgorithm::SHA512,
+                "e6eda213df25f96ca380dd07640df530574e380c1b93d5d863fec05d5908a4880a3075fef4a438cfb1023cc51affb4624002f54b4790fe8362c7de032eb39aaa",
+            ),
         ];
 
         let temp = TempDir::new()?;
