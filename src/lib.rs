@@ -21,6 +21,7 @@ pub enum Error {
 
 type Result<R> = std::result::Result<R, Error>;
 
+/// A lazily initialized optional value that can be serialized/deserialized via `Option<T>`.
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(from = "Option<T>")]
 #[serde(into = "Option<T>")]
@@ -61,6 +62,7 @@ where
     }
 }
 
+/// Supported hashing algorithms used to identify chunks.
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 pub enum HashingAlgorithm {
     MD5,
@@ -70,6 +72,7 @@ pub enum HashingAlgorithm {
 }
 
 impl HashingAlgorithm {
+    /// Returns a dynamically dispatched hasher instance corresponding to `self`.
     fn select_hasher(&self) -> Box<dyn sha2::digest::DynDigest> {
         match self {
             Self::MD5 => Box::new(md5::Md5::default()),
@@ -80,12 +83,16 @@ impl HashingAlgorithm {
     }
 }
 
+/// Represents a file in the source tree along with its chunked representation.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct FileWithChunks {
     #[serde(skip)]
     base: PathBuf,
+    /// Path of the file relative to the source root.
     pub path: String,
+    /// File size in bytes.
     pub size: u64,
+    /// Modification time of the file.
     pub mtime: SystemTime,
     chunks: LazyOption<Vec<FileChunk>>,
     hashing_algorithm: HashingAlgorithm,
@@ -100,6 +107,7 @@ impl PartialEq for FileWithChunks {
 impl Eq for FileWithChunks {}
 
 impl FileWithChunks {
+    /// Creates a new instance by reading metadata from `path` under `source_path`.
     pub fn try_new(
         source_path: impl Into<PathBuf>,
         path: impl Into<PathBuf>,
@@ -128,6 +136,7 @@ impl FileWithChunks {
         })
     }
 
+    /// Returns already computed chunks if present.
     pub fn get_chunks(&self) -> Option<&Vec<FileChunk>> {
         self.chunks.get()
     }
@@ -143,6 +152,7 @@ impl FileWithChunks {
         Ok(self.chunks.get().unwrap())
     }
 
+    /// Returns existing chunks or computes them if absent.
     fn calculate_chunks(&self) -> Result<Vec<FileChunk>> {
         let path = self.base.join(&self.path);
 
@@ -188,6 +198,7 @@ impl FileWithChunks {
     }
 }
 
+/// A single chunk of a file, including its offset in the original file, size, and hash.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct FileChunk {
     pub start: u64,
@@ -198,6 +209,7 @@ pub struct FileChunk {
 }
 
 impl FileChunk {
+    /// Constructs a new `FileChunk`.
     pub fn new(start: u64, size: u64, hash: String) -> Self {
         Self {
             start,
@@ -208,17 +220,21 @@ impl FileChunk {
     }
 }
 
+/// In-memory cache of `FileWithChunks` indexed by their relative paths.
 pub struct DedupCache(HashMap<String, FileWithChunks>);
 
 impl DedupCache {
+    /// Creates an empty dedup cache.
     fn new() -> Self {
         Self(HashMap::new())
     }
 
+    /// Constructs a cache from an existing hashmap.
     fn from_hashmap(hash_map: HashMap<String, FileWithChunks>) -> Self {
         Self(hash_map)
     }
 
+    /// Reads cache entries from a file. Supports optional zstd compression based on extension.
     fn read_from_file(&mut self, path: impl AsRef<Path>) {
         let reader = File::open(&path).map(BufReader::new);
 
@@ -241,6 +257,7 @@ impl DedupCache {
         }
     }
 
+    /// Writes the cache to a file, optionally compressing with zstd if extension suggests.
     fn write_to_file(&self, path: impl AsRef<Path>) {
         std::fs::create_dir_all(path.as_ref().parent().unwrap()).unwrap();
         let writer = File::create(&path).map(BufWriter::new);
@@ -260,6 +277,8 @@ impl DedupCache {
         }
     }
 
+    /// Iterates over all chunks, yielding the chunk hash, enriched `FileChunk` with path, and a
+    /// flag indicating if it was freshly calculated.
     pub fn get_chunks(&self) -> Result<impl Iterator<Item = (String, FileChunk, bool)> + '_> {
         Ok(self.values().flat_map(|fwc| {
             let mut dirty = fwc.get_chunks().is_none();
@@ -313,6 +332,8 @@ impl DedupCache {
     }
 }
 
+/// Primary deduper: scans a source directory, maintains a chunk cache, and writes deduplicated
+/// chunk data to a target location.
 pub struct Deduper {
     source_path: PathBuf,
     cache_path: PathBuf,
@@ -320,6 +341,10 @@ pub struct Deduper {
 }
 
 impl Deduper {
+    /// Initializes a new `Deduper`:
+    /// - Loads provided cache files in reverse order (so later ones override earlier),
+    /// - Prunes missing entries,
+    /// - Scans the source tree and updates or inserts modified/new files.
     pub fn new(
         source_path: impl Into<PathBuf>,
         cache_paths: Vec<impl Into<PathBuf>>,
@@ -376,6 +401,7 @@ impl Deduper {
         }
     }
 
+    /// Atomically writes the internal cache back to its backing file.
     pub fn write_cache(&self) {
         let temp_path = self.cache_path.clone().with_extension(format!(
             "tmp.{}.{}",
@@ -393,6 +419,8 @@ impl Deduper {
         std::fs::rename(temp_path, &self.cache_path).unwrap();
     }
 
+    /// Writes all chunks from the current cache to `target_path/data`, applying optional
+    /// decluttering (path splitting) to reduce directory entropy.
     pub fn write_chunks(
         &mut self,
         target_path: impl Into<PathBuf>,
@@ -427,12 +455,14 @@ impl Deduper {
     }
 }
 
+/// Rebuilds original files from deduplicated chunk storage using a cache.
 pub struct Hydrator {
     source_path: PathBuf,
     pub cache: DedupCache,
 }
 
 impl Hydrator {
+    /// Loads the cache(s) and prepares for hydration.
     pub fn new(source_path: impl Into<PathBuf>, cache_paths: Vec<impl Into<PathBuf>>) -> Self {
         let source_path = source_path.into();
 
@@ -446,6 +476,8 @@ impl Hydrator {
         Self { source_path, cache }
     }
 
+    /// Restores files into `target_path` by concatenating their chunks. `declutter_levels` must
+    /// match the level used during deduplication.
     pub fn restore_files(&self, target_path: impl Into<PathBuf>, declutter_levels: usize) {
         let data_dir = self.source_path.join("data");
         let target_path = target_path.into();
