@@ -4,11 +4,11 @@ version = "0.1.0-SNAPSHOT"
 edition = "2024"
 
 authors = ["Florian Gamböck <mail@floga.de>"]
-description = "Unconventional deduping method."
-repository = "https://github.com/FloGa/crazy-deduper.git"
+description = "Deduplicates files into content-addressed chunks with selectable hash algorithms and restores them via a persistent cache."
+repository = "https://github.com/FloGa/crazy-deduper"
 readme = "README.md"
-categories = []
-keywords = []
+categories = ["command-line-utilities", "filesystem"]
+keywords = ["cli", "file", "utility"]
 license = "MIT"
 
 [dependencies]
