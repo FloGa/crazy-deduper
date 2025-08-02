@@ -211,12 +211,12 @@ impl FileChunk {
 pub struct DedupCache(HashMap<String, FileWithChunks>);
 
 impl DedupCache {
-    fn new() -> DedupCache {
+    fn new() -> Self {
         Self(HashMap::new())
     }
 
-    fn from_hashmap(hash_map: HashMap<String, FileWithChunks>) -> DedupCache {
-        DedupCache(hash_map)
+    fn from_hashmap(hash_map: HashMap<String, FileWithChunks>) -> Self {
+        Self(hash_map)
     }
 
     fn read_from_file(&mut self, path: impl AsRef<Path>) {
