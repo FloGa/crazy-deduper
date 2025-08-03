@@ -1,6 +1,204 @@
+//! # Crazy Deduper
+//!
+//! [![badge github]][url github]
+//! [![badge crates.io]][url crates.io]
+//! [![badge docs.rs]][url docs.rs]
+//! [![badge license]][url license]
+//!
+//! [//]: # (@formatter:off)
+//! [badge github]: https://img.shields.io/badge/github-FloGa%2Fcrazy--deduper-green
+//! [badge crates.io]: https://img.shields.io/crates/v/crazy-deduper
+//! [badge docs.rs]: https://img.shields.io/docsrs/crazy-deduper
+//! [badge license]: https://img.shields.io/crates/l/crazy-deduper
+//!
+//! [url github]: https://github.com/FloGa/crazy-deduper
+//! [url crates.io]: https://crates.io/crates/crazy-deduper
+//! [url docs.rs]: https://docs.rs/crazy-deduper
+//! [url license]: https://github.com/FloGa/crazy-deduper/blob/develop/LICENSE
+//! [//]: # (@formatter:on)
+//!
+//! > Deduplicates files into content-addressed chunks with selectable hash algorithms and restores them via a persistent
+//! > cache.
+//!
+//! *Crazy Deduper* is a Rust tool that splits files into fixed-size chunks, identifies them using configurable hash
+//! algorithms (MD5, SHA1, SHA256, SHA512), and deduplicates redundant data into a content-addressed store. It maintains an
+//! incremental cache for speed, supports atomic cache updates, and can reverse the process (hydrate) to reconstruct
+//! original files. Optional decluttering of chunk paths and filesystem boundary awareness make it flexible for real-world
+//! workflows.
+//!
+//! This crate is split into an [Application](#application) part and a [Library](#library) part.
+//!
+//! ## Application
+//!
+//! ### Installation
+//!
+//! This tool can be installed easily through Cargo via `crates.io`:
+//!
+//! ```shell
+//! cargo install --locked crazy-deduper
+//! ```
+//!
+//! Please note that the `--locked` flag is necessary here to have the exact same dependencies as when the application was
+//! tagged and tested. Without it, you might get more up-to-date versions of dependencies, but you have the risk of
+//! undefined and unexpected behavior if the dependencies changed some functionalities. The application might even fail to
+//! build if the public API of a dependency changed too much.
+//!
+//! Alternatively, pre-built binaries can be downloaded from the [GitHub releases][gh-releases] page.
+//!
+//! [gh-releases]: https://github.com/FloGa/crazy-deduper/releases
+//!
+//! ### Usage
+//!
+//! ```text
+//! Usage: crazy-deduper [OPTIONS] <SOURCE> <TARGET>
+//!
+//! Arguments:
+//!   <SOURCE>
+//!           Source directory
+//!
+//!   <TARGET>
+//!           Target directory
+//!
+//! Options:
+//!       --cache-file <CACHE_FILE>
+//!           Path to cache file
+//!
+//!           Can be used multiple times. The files are read in reverse order, so they should be sorted with the most accurate ones in the beginning. The first given will be written.
+//!
+//!       --hashing-algorithm <HASHING_ALGORITHM>
+//!           Hashing algorithm to use for chunk filenames
+//!
+//!           [default: sha1]
+//!           [possible values: md5, sha1, sha256, sha512]
+//!
+//!       --same-file-system
+//!           Limit file listing to same file system
+//!
+//!       --declutter-levels <DECLUTTER_LEVELS>
+//!           Declutter files into this many subdirectory levels
+//!
+//!           [default: 0]
+//!
+//!   -d, --decode
+//!           Invert behavior, restore tree from deduplicated data
+//!
+//!           [aliases: --hydrate]
+//!
+//!   -h, --help
+//!           Print help (see a summary with '-h')
+//!
+//!   -V, --version
+//!           Print version
+//! ```
+//!
+//! To create a deduped version of `source` directory to `deduped`, you can use:
+//!
+//! ```shell
+//! crazy-deduper --declutter-levels 3 --cache-file cache.json.zst source deduped
+//! ```
+//!
+//! If the cache file ends with `.zst`, it will be encoded (or decoded in the case of hydrating) using the ZSTD compression
+//! algorithm. For any other extension, plain JSON will be used.
+//!
+//! To restore (hydrate) the directory again into the directory `hydrated`, you can use:
+//!
+//! ```shell
+//! crazy-deduper --declutter-levels 3 --cache-file cache.json.zst deduped hydrated
+//! ```
+//!
+//! Please note that for now you need to specify the same decluttering level as you did when deduping the source directory.
+//! This limitation will be lifted in a future version.
+//!
+//! ### Cache Files
+//!
+//! The cache file is necessary to keep track of all file chunks and hashes. Without the cache you would not be able to
+//! restore your files.
+//!
+//! The cache file can be re-used, even if the source directory changed. It keeps track of the file sizes and modification
+//! times and only re-hashes new or changed files. Deleted files are deleted from the cache.
+//!
+//! You can also use older cache files in addition to a new one:
+//!
+//! ```shell
+//! crazy-deduper --cache-file cache.json.zst --cache-file cache-from-yesterday.json.zst source deduped
+//! ```
+//!
+//! The cache files are read in reverse order in which they are given on the command line, so the content of earlier cache
+//! files is preferred over later ones. Hence, you should put your most accurate cache files to the beginning. Moreover, the
+//! first given cache file is the one that will be written to, it does not need to exist.
+//!
+//! In the given example, if `cache.json.zst` does not exist, the internal cache is pre-filled from
+//! `cache-from-yesterday.json.zst` so that only new and modified files need to be re-hashed. The result is then written
+//! into `cache.json.zst`.
+//!
+//! ## Library
+//!
+//! ### Installation
+//!
+//! To add the `crazy-deduper` library to your project, you can use:
+//!
+//! ```shell
+//! cargo add crazy-deduper
+//! ```
+//!
+//! ### Usage
+//!
+//! The following is a short summary of how this library is intended to be used.
+//!
+//! #### Copy Chunks
+//!
+//! This is an example of how to re-create the main functionality of the [Application](#application).
+//!
+//! ```rust no_run
+//! fn main() {
+//!     // Deduplicate
+//!     let mut deduper = crazy_deduper::Deduper::new(
+//!         "source",
+//!         vec!["cache.json.zst"],
+//!         crazy_deduper::HashingAlgorithm::MD5,
+//!         true,
+//!     );
+//!     deduper.write_chunks("deduped", 3).unwrap();
+//!     deduper.write_cache();
+//!
+//!     // Hydrate again
+//!     let hydrator = crazy_deduper::Hydrator::new("deduped", vec!["cache.json.zst"]);
+//!     hydrator.restore_files("hydrated", 3);
+//! }
+//! ```
+//!
+//! #### Get File Chunks as an Iterator
+//!
+//! This method can be used if you want to implement your own logic and you only need the chunk objects.
+//!
+//! ```rust no_run
+//! fn main() {
+//!     let deduper = crazy_deduper::Deduper::new(
+//!         "source",
+//!         vec!["cache.json.zst"],
+//!         crazy_deduper::HashingAlgorithm::MD5,
+//!         true,
+//!     );
+//!
+//!     for (hash, chunk, dirty) in deduper.cache.get_chunks().unwrap() {
+//!         // Chunks and hashes are calculated on the fly, so you don't need to wait for the whole
+//!         // directory tree to be hashed.
+//!         println!("{hash:?}: {chunk:?}");
+//!         if dirty {
+//!             // This is just a simple example. Please do not write after every hash calculation, the
+//!             // IO overhead will slow things down dramatically. You should write only every 10
+//!             // seconds or so. Please be aware that you can kill the execution at any time. Since
+//!             // the cache will be written atomically and re-used on subsequent calls, you can
+//!             // terminate and resume at any point.
+//!             deduper.write_cache();
+//!         }
+//!     }
+//! }
+//! ```
+
 use std::cell::OnceCell;
-use std::collections::hash_map::IntoIter;
 use std::collections::HashMap;
+use std::collections::hash_map::IntoIter;
 use std::fs::File;
 use std::io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 use std::ops::Deref;
@@ -15,27 +213,13 @@ use walkdir::WalkDir;
 
 #[derive(Debug, Error)]
 pub enum Error {
-    #[error("'{0}' already exists!")]
-    AlreadyExists(PathBuf),
-
-    #[error("'{0}' not properly initialized")]
-    NotInitialized(PathBuf),
-
     #[error(transparent)]
     Io(#[from] std::io::Error),
-
-    #[error(transparent)]
-    Walkdir(#[from] walkdir::Error),
-
-    #[error(transparent)]
-    Utf8(#[from] std::string::FromUtf8Error),
-
-    #[error(transparent)]
-    SerdeJson(#[from] serde_json::Error),
 }
 
 type Result<R> = std::result::Result<R, Error>;
 
+/// A lazily initialized optional value that can be serialized/deserialized via `Option<T>`.
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(from = "Option<T>")]
 #[serde(into = "Option<T>")]
@@ -76,6 +260,7 @@ where
     }
 }
 
+/// Supported hashing algorithms used to identify chunks.
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 pub enum HashingAlgorithm {
     MD5,
@@ -85,6 +270,7 @@ pub enum HashingAlgorithm {
 }
 
 impl HashingAlgorithm {
+    /// Returns a dynamically dispatched hasher instance corresponding to `self`.
     fn select_hasher(&self) -> Box<dyn sha2::digest::DynDigest> {
         match self {
             Self::MD5 => Box::new(md5::Md5::default()),
@@ -95,12 +281,16 @@ impl HashingAlgorithm {
     }
 }
 
+/// Represents a file in the source tree along with its chunked representation.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct FileWithChunks {
     #[serde(skip)]
     base: PathBuf,
+    /// Path of the file relative to the source root.
     pub path: String,
+    /// File size in bytes.
     pub size: u64,
+    /// Modification time of the file.
     pub mtime: SystemTime,
     chunks: LazyOption<Vec<FileChunk>>,
     hashing_algorithm: HashingAlgorithm,
@@ -115,6 +305,7 @@ impl PartialEq for FileWithChunks {
 impl Eq for FileWithChunks {}
 
 impl FileWithChunks {
+    /// Creates a new instance by reading metadata from `path` under `source_path`.
     pub fn try_new(
         source_path: impl Into<PathBuf>,
         path: impl Into<PathBuf>,
@@ -143,6 +334,7 @@ impl FileWithChunks {
         })
     }
 
+    /// Returns already computed chunks if present.
     pub fn get_chunks(&self) -> Option<&Vec<FileChunk>> {
         self.chunks.get()
     }
@@ -158,6 +350,7 @@ impl FileWithChunks {
         Ok(self.chunks.get().unwrap())
     }
 
+    /// Returns existing chunks or computes them if absent.
     fn calculate_chunks(&self) -> Result<Vec<FileChunk>> {
         let path = self.base.join(&self.path);
 
@@ -203,6 +396,7 @@ impl FileWithChunks {
     }
 }
 
+/// A single chunk of a file, including its offset in the original file, size, and hash.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct FileChunk {
     pub start: u64,
@@ -213,6 +407,7 @@ pub struct FileChunk {
 }
 
 impl FileChunk {
+    /// Constructs a new `FileChunk`.
     pub fn new(start: u64, size: u64, hash: String) -> Self {
         Self {
             start,
@@ -223,17 +418,21 @@ impl FileChunk {
     }
 }
 
+/// In-memory cache of `FileWithChunks` indexed by their relative paths.
 pub struct DedupCache(HashMap<String, FileWithChunks>);
 
 impl DedupCache {
-    fn new() -> DedupCache {
+    /// Creates an empty dedup cache.
+    fn new() -> Self {
         Self(HashMap::new())
     }
 
-    fn from_hashmap(hash_map: HashMap<String, FileWithChunks>) -> DedupCache {
-        DedupCache(hash_map)
+    /// Constructs a cache from an existing hashmap.
+    fn from_hashmap(hash_map: HashMap<String, FileWithChunks>) -> Self {
+        Self(hash_map)
     }
 
+    /// Reads cache entries from a file. Supports optional zstd compression based on extension.
     fn read_from_file(&mut self, path: impl AsRef<Path>) {
         let reader = File::open(&path).map(BufReader::new);
 
@@ -256,6 +455,7 @@ impl DedupCache {
         }
     }
 
+    /// Writes the cache to a file, optionally compressing with zstd if extension suggests.
     fn write_to_file(&self, path: impl AsRef<Path>) {
         std::fs::create_dir_all(path.as_ref().parent().unwrap()).unwrap();
         let writer = File::create(&path).map(BufWriter::new);
@@ -275,6 +475,8 @@ impl DedupCache {
         }
     }
 
+    /// Iterates over all chunks, yielding the chunk hash, enriched `FileChunk` with path, and a
+    /// flag indicating if it was freshly calculated.
     pub fn get_chunks(&self) -> Result<impl Iterator<Item = (String, FileChunk, bool)> + '_> {
         Ok(self.values().flat_map(|fwc| {
             let mut dirty = fwc.get_chunks().is_none();
@@ -328,6 +530,8 @@ impl DedupCache {
     }
 }
 
+/// Primary deduper: scans a source directory, maintains a chunk cache, and writes deduplicated
+/// chunk data to a target location.
 pub struct Deduper {
     source_path: PathBuf,
     cache_path: PathBuf,
@@ -335,6 +539,10 @@ pub struct Deduper {
 }
 
 impl Deduper {
+    /// Initializes a new `Deduper`:
+    /// - Loads provided cache files in reverse order (so later ones override earlier),
+    /// - Prunes missing entries,
+    /// - Scans the source tree and updates or inserts modified/new files.
     pub fn new(
         source_path: impl Into<PathBuf>,
         cache_paths: Vec<impl Into<PathBuf>>,
@@ -391,6 +599,7 @@ impl Deduper {
         }
     }
 
+    /// Atomically writes the internal cache back to its backing file.
     pub fn write_cache(&self) {
         let temp_path = self.cache_path.clone().with_extension(format!(
             "tmp.{}.{}",
@@ -408,6 +617,8 @@ impl Deduper {
         std::fs::rename(temp_path, &self.cache_path).unwrap();
     }
 
+    /// Writes all chunks from the current cache to `target_path/data`, applying optional
+    /// decluttering (path splitting) to reduce directory entropy.
     pub fn write_chunks(
         &mut self,
         target_path: impl Into<PathBuf>,
@@ -442,12 +653,14 @@ impl Deduper {
     }
 }
 
+/// Rebuilds original files from deduplicated chunk storage using a cache.
 pub struct Hydrator {
     source_path: PathBuf,
     pub cache: DedupCache,
 }
 
 impl Hydrator {
+    /// Loads the cache(s) and prepares for hydration.
     pub fn new(source_path: impl Into<PathBuf>, cache_paths: Vec<impl Into<PathBuf>>) -> Self {
         let source_path = source_path.into();
 
@@ -461,6 +674,8 @@ impl Hydrator {
         Self { source_path, cache }
     }
 
+    /// Restores files into `target_path` by concatenating their chunks. `declutter_levels` must
+    /// match the level used during deduplication.
     pub fn restore_files(&self, target_path: impl Into<PathBuf>, declutter_levels: usize) {
         let data_dir = self.source_path.join("data");
         let target_path = target_path.into();
@@ -534,7 +749,10 @@ mod tests {
                 HashingAlgorithm::SHA256,
                 "e8c73ac958a87f17906b092bd99f37038788ee23b271574aad6d5bf1c76cc61c",
             ),
-            (HashingAlgorithm::SHA512, "e6eda213df25f96ca380dd07640df530574e380c1b93d5d863fec05d5908a4880a3075fef4a438cfb1023cc51affb4624002f54b4790fe8362c7de032eb39aaa"),
+            (
+                HashingAlgorithm::SHA512,
+                "e6eda213df25f96ca380dd07640df530574e380c1b93d5d863fec05d5908a4880a3075fef4a438cfb1023cc51affb4624002f54b4790fe8362c7de032eb39aaa",
+            ),
         ];
 
         let temp = TempDir::new()?;

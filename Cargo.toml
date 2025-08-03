@@ -1,14 +1,14 @@
 [package]
 name = "crazy-deduper"
 version = "0.1.0-SNAPSHOT"
-edition = "2021"
+edition = "2024"
 
 authors = ["Florian Gamböck <mail@floga.de>"]
-description = "Unconventional deduping method."
-repository = "https://github.com/FloGa/crazy-deduper.git"
+description = "Deduplicates files into content-addressed chunks with selectable hash algorithms and restores them via a persistent cache."
+repository = "https://github.com/FloGa/crazy-deduper"
 readme = "README.md"
-categories = []
-keywords = []
+categories = ["command-line-utilities", "filesystem"]
+keywords = ["cli", "file", "utility"]
 license = "MIT"
 
 [dependencies]
@@ -22,7 +22,7 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 sha1 = "0.10.6"
 sha2 = "0.10.8"
-thiserror = "1.0.50"
+thiserror = "2.0.12"
 walkdir = "2.4.0"
 zstd = "0.13.0"
 

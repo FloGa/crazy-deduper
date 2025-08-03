@@ -6,9 +6,9 @@ use std::time::{Duration, SystemTime};
 
 use anyhow::Result;
 use assert_cmd::Command;
+use assert_fs::TempDir;
 use assert_fs::fixture::ChildPath;
 use assert_fs::prelude::*;
-use assert_fs::TempDir;
 use sha2::{Digest, Sha256};
 use walkdir::WalkDir;
 
