@@ -331,11 +331,6 @@ fn multiple_unrelated_sources_with_same_cache() -> Result<()> {
 fn file_declutter() -> Result<()> {
     fn setup_origin(path_origin: &ChildPath) -> Result<()> {
         path_origin.child("empty").touch()?;
-
-        for i in fs::read_dir(&path_origin)? {
-            println!("{i:#?}");
-        }
-
         Ok(())
     }
 
@@ -346,10 +341,6 @@ fn file_declutter() -> Result<()> {
         let mut dirs;
 
         dir = path_dedup.child("data").to_path_buf();
-
-        for i in fs::read_dir(&dir)? {
-            println!("{i:#?}");
-        }
 
         dirs = fs::read_dir(dir)?.flatten().collect::<Vec<_>>();
         assert_eq!(dirs.len(), 1, "1");
