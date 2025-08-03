@@ -52,6 +52,45 @@ Alternatively, pre-built binaries can be downloaded from the [GitHub releases][g
 <!--% !cargo --quiet run -- --help | tail -n+3 %-->
 
 ```text
+Usage: crazy-deduper [OPTIONS] <SOURCE> <TARGET>
+
+Arguments:
+  <SOURCE>
+          Source directory
+
+  <TARGET>
+          Target directory
+
+Options:
+      --cache-file <CACHE_FILE>
+          Path to cache file
+          
+          Can be used multiple times. The files are read in reverse order, so they should be sorted with the most accurate ones in the beginning. The first given will be written.
+
+      --hashing-algorithm <HASHING_ALGORITHM>
+          Hashing algorithm to use for chunk filenames
+          
+          [default: sha1]
+          [possible values: md5, sha1, sha256, sha512]
+
+      --same-file-system
+          Limit file listing to same file system
+
+      --declutter-levels <DECLUTTER_LEVELS>
+          Declutter files into this many subdirectory levels
+          
+          [default: 0]
+
+  -d, --decode
+          Invert behavior, restore tree from deduplicated data
+          
+          [aliases: --hydrate]
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+  -V, --version
+          Print version
 ```
 
 To create a deduped version of `source` directory to `deduped`, you can use:
