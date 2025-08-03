@@ -197,8 +197,8 @@
 //! ```
 
 use std::cell::OnceCell;
-use std::collections::HashMap;
 use std::collections::hash_map::IntoIter;
+use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 use std::ops::Deref;
@@ -699,14 +699,112 @@ impl Hydrator {
             target_file.set_modified(fwc.mtime).unwrap()
         }
     }
+
+    /// Check if all chunk files listed in the cache are present in source directory.
+    pub fn check_cache(&self) -> bool {
+        let mut success = true;
+
+        let path_data = self.source_path.join("data");
+        for (hash, meta) in self
+            .cache
+            .get_chunks()
+            .unwrap()
+            .map(|(hash, meta, ..)| (PathBuf::from(hash), meta))
+        {
+            let path = path_data.join(FileDeclutter::oneshot(hash, 3));
+
+            if !path.exists() {
+                eprintln!("Does not exist: {}", path.display());
+                success = false;
+                continue;
+            }
+
+            if path.metadata().unwrap().len() != meta.size {
+                eprintln!(
+                    "Does not have expected size of {}: {}",
+                    meta.size,
+                    path.display()
+                );
+                success = false;
+                continue;
+            }
+        }
+
+        success
+    }
+
+    /// List files in source directory that are not listed in cache.
+    pub fn list_extra_files(&self, declutter_levels: usize) -> impl Iterator<Item = PathBuf> {
+        let files_in_cache = FileDeclutter::new_from_iter(
+            self.cache
+                .get_chunks()
+                .unwrap()
+                .map(|(hash, ..)| PathBuf::from(hash)),
+        )
+        .base(&self.source_path.join("data"))
+        .levels(declutter_levels)
+        .map(|(_, path)| path)
+        .collect::<HashSet<_>>();
+
+        WalkDir::new(&self.source_path.join("data"))
+            .min_depth(1)
+            .same_file_system(false)
+            .into_iter()
+            .filter(move |entry| {
+                entry
+                    .as_ref()
+                    .map(|entry| {
+                        entry.file_type().is_file() && !files_in_cache.contains(entry.path())
+                    })
+                    .unwrap_or_default()
+            })
+            .flatten()
+            .map(|entry| entry.into_path())
+    }
+
+    /// Delete files in source directory that are not listed in cache.
+    pub fn delete_extra_files(&self, declutter_levels: usize) -> anyhow::Result<()> {
+        for path in self.list_extra_files(declutter_levels) {
+            std::fs::remove_file(&path)?;
+        }
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    use assert_fs::fixture::ChildPath;
     use assert_fs::prelude::*;
     use assert_fs::{NamedTempFile, TempDir};
 
     use super::*;
+
+    fn setup() -> anyhow::Result<(TempDir, ChildPath, ChildPath, ChildPath)> {
+        let temp = TempDir::new()?;
+
+        let origin = temp.child("origin");
+        origin.create_dir_all()?;
+        origin.child("README.md").write_str("Hello, world!")?;
+
+        let deduped = temp.child("deduped");
+        deduped.create_dir_all()?;
+
+        let cache = temp.child("cache.json");
+
+        {
+            let mut deduper = Deduper::new(
+                origin.to_path_buf(),
+                vec![cache.to_path_buf()],
+                HashingAlgorithm::MD5,
+                true,
+            );
+            deduper.write_chunks(deduped.to_path_buf(), 3)?;
+            deduper.write_cache();
+        }
+
+        Ok((temp, origin, deduped, cache))
+    }
 
     #[test]
     fn compare_filechunk_objects() -> anyhow::Result<()> {
@@ -776,6 +874,69 @@ mod tests {
                 algorithm
             );
         }
+
+        Ok(())
+    }
+
+    #[test]
+    fn check_cache() -> anyhow::Result<()> {
+        let (_temp, _origin, deduped, cache) = setup()?;
+
+        assert!(
+            Hydrator::new(deduped.to_path_buf(), vec![cache.to_path_buf()]).check_cache(),
+            "Cache checking failed when it shouldn't"
+        );
+
+        std::fs::remove_dir_all(deduped.child("data").read_dir()?.next().unwrap()?.path())?;
+
+        assert!(
+            !Hydrator::new(deduped.to_path_buf(), vec![cache.to_path_buf()]).check_cache(),
+            "Cache checking didn't fail when it should"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn check_list_extra() -> anyhow::Result<()> {
+        let (_temp, _origin, deduped, cache) = setup()?;
+
+        assert_eq!(
+            Hydrator::new(deduped.to_path_buf(), vec![cache.to_path_buf()])
+                .list_extra_files(3)
+                .count(),
+            0,
+            "Extra files present when there shouldn't be"
+        );
+
+        deduped
+            .child("data")
+            .child("extra_file")
+            .write_str("Hello, world!")?;
+
+        assert_eq!(
+            Hydrator::new(deduped.to_path_buf(), vec![cache.to_path_buf()])
+                .list_extra_files(3)
+                .count(),
+            1,
+            "Number of extra files present is not 1"
+        );
+
+        deduped
+            .child("data")
+            .child("e")
+            .child("x")
+            .child("t")
+            .child("extra_file")
+            .write_str("Hello, world!")?;
+
+        assert_eq!(
+            Hydrator::new(deduped.to_path_buf(), vec![cache.to_path_buf()])
+                .list_extra_files(3)
+                .count(),
+            2,
+            "Number of extra files present is not 2"
+        );
 
         Ok(())
     }
