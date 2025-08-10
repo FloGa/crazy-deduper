@@ -32,4 +32,4 @@ jobs:
       test-args: --workspace ${{ inputs.test-args }}
       test-on-linux: true
       test-on-macos: true
-      test-on-windows: false
+      test-on-windows: true

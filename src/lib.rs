@@ -774,6 +774,8 @@ impl Hydrator {
 
 #[cfg(test)]
 mod tests {
+    use std::fs::OpenOptions;
+
     use assert_fs::fixture::ChildPath;
     use assert_fs::prelude::*;
     use assert_fs::{NamedTempFile, TempDir};
@@ -825,7 +827,12 @@ mod tests {
         assert_eq!(fwc_1, fwc_1_same);
         assert_ne!(fwc_1, fwc_2);
 
-        File::open(&file_1)?.set_modified(SystemTime::now())?;
+        // Some operating systems like Windows need write access to the file to be able to set the
+        // modified time.
+        OpenOptions::new()
+            .write(true)
+            .open(&file_1)?
+            .set_modified(SystemTime::now())?;
 
         let fwc_1_new =
             FileWithChunks::try_new(&temp.path(), &file_1.path(), HashingAlgorithm::MD5)?;
