@@ -371,14 +371,11 @@ impl FileWithChunks {
                 .into_par_iter()
                 .map(|start| {
                     let mut input = BufReader::new(File::open(&path)?);
-                    input.seek(SeekFrom::Start(start * chunk_size)).unwrap();
+                    input.seek(SeekFrom::Start(start * chunk_size))?;
 
-                    let chunk = input
-                        .bytes()
-                        .by_ref()
-                        .take(chunk_size as usize)
-                        .flatten()
-                        .collect::<Vec<_>>();
+                    let mut limited = input.take(chunk_size);
+                    let mut chunk = Vec::with_capacity(chunk_size as usize);
+                    limited.read_to_end(&mut chunk)?;
 
                     let mut hasher = hashing_algorithm.select_hasher();
                     hasher.update(&chunk);
