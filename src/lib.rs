@@ -203,6 +203,7 @@ use std::fs::File;
 use std::io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::SystemTime;
 
 use file_declutter::FileDeclutter;
@@ -218,6 +219,40 @@ pub enum Error {
 }
 
 type Result<R> = std::result::Result<R, Error>;
+
+#[cfg(unix)]
+fn read_at_chunk(file: &File, offset: u64, len: usize) -> std::io::Result<Vec<u8>> {
+    use std::os::unix::fs::FileExt;
+    let mut buf = vec![0u8; len];
+    let mut pos = 0usize;
+    while pos < len {
+        let read = file.read_at(&mut buf[pos..], offset + pos as u64)?;
+        if read == 0 {
+            break;
+        }
+        pos += read;
+    }
+    buf.truncate(pos);
+    Ok(buf)
+}
+
+#[cfg(windows)]
+fn read_at_chunk(file: &File, offset: u64, len: usize) -> std::io::Result<Vec<u8>> {
+    use std::os::windows::fs::FileExt;
+    // Create a clone of the file handle for parallel access.
+    let mut handle = file.try_clone()?;
+    let mut buf = vec![0u8; len];
+    let mut pos = 0usize;
+    while pos < len {
+        let read = handle.seek_read(&mut buf[pos..], offset + pos as u64)?;
+        if read == 0 {
+            break;
+        }
+        pos += read;
+    }
+    buf.truncate(pos);
+    Ok(buf)
+}
 
 /// A lazily initialized optional value that can be serialized/deserialized via `Option<T>`.
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -367,26 +402,24 @@ impl FileWithChunks {
 
             std::iter::once(Ok::<FileChunk, Error>(FileChunk::new(0, 0, hash))).collect()
         } else {
-            (0..(size + chunk_size - 1) / chunk_size)
-                .into_par_iter()
-                .map(|start| {
-                    let mut input = BufReader::new(File::open(&path)?);
-                    input.seek(SeekFrom::Start(start * chunk_size))?;
+            // Open file once and read it in parallel.
+            let file = Arc::new(File::open(&path)?);
+            let total_chunks = (size + chunk_size - 1) / chunk_size;
 
-                    let mut limited = input.take(chunk_size);
-                    let mut chunk = Vec::with_capacity(chunk_size as usize);
-                    limited.read_to_end(&mut chunk)?;
+            (0..total_chunks)
+                .into_par_iter()
+                .map(|chunk_idx| {
+                    let offset = chunk_idx * chunk_size;
+                    let len = chunk_size.min(size.saturating_sub(offset)) as usize;
+
+                    let data = read_at_chunk(&file, offset, len)?;
 
                     let mut hasher = hashing_algorithm.select_hasher();
-                    hasher.update(&chunk);
+                    hasher.update(&data);
                     let hash = hasher.finalize();
                     let hash = base16ct::lower::encode_string(&hash);
 
-                    Ok::<FileChunk, Error>(FileChunk::new(
-                        start * chunk_size,
-                        chunk.len() as u64,
-                        hash,
-                    ))
+                    Ok::<FileChunk, Error>(FileChunk::new(offset, data.len() as u64, hash))
                 })
                 .collect()
         }
