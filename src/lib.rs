@@ -645,15 +645,12 @@ impl Deduper {
             if !chunk_file.exists() {
                 std::fs::create_dir_all(&chunk_file.parent().unwrap())?;
                 let mut out = File::create(chunk_file)?;
-                let data_in = BufReader::new(File::open(
+                let mut src = BufReader::new(File::open(
                     self.source_path.join(chunk.path.as_ref().unwrap()),
-                )?)
-                .bytes()
-                .skip(chunk.start as usize)
-                .take(chunk.size as usize)
-                .flatten()
-                .collect::<Vec<_>>();
-                out.write_all(&data_in)?;
+                )?);
+                src.seek(SeekFrom::Start(chunk.start))?;
+                let mut limited = src.take(chunk.size);
+                std::io::copy(&mut limited, &mut out)?;
             }
         }
 
