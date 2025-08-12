@@ -701,7 +701,7 @@ impl Hydrator {
     }
 
     /// Check if all chunk files listed in the cache are present in source directory.
-    pub fn check_cache(&self) -> bool {
+    pub fn check_cache(&self, declutter_levels: usize) -> bool {
         let mut success = true;
 
         let path_data = self.source_path.join("data");
@@ -711,7 +711,7 @@ impl Hydrator {
             .unwrap()
             .map(|(hash, meta, ..)| (PathBuf::from(hash), meta))
         {
-            let path = path_data.join(FileDeclutter::oneshot(hash, 3));
+            let path = path_data.join(FileDeclutter::oneshot(hash, declutter_levels));
 
             if !path.exists() {
                 eprintln!("Does not exist: {}", path.display());
@@ -890,14 +890,14 @@ mod tests {
         let (_temp, _origin, deduped, cache) = setup()?;
 
         assert!(
-            Hydrator::new(deduped.to_path_buf(), vec![cache.to_path_buf()]).check_cache(),
+            Hydrator::new(deduped.to_path_buf(), vec![cache.to_path_buf()]).check_cache(3),
             "Cache checking failed when it shouldn't"
         );
 
         std::fs::remove_dir_all(deduped.child("data").read_dir()?.next().unwrap()?.path())?;
 
         assert!(
-            !Hydrator::new(deduped.to_path_buf(), vec![cache.to_path_buf()]).check_cache(),
+            !Hydrator::new(deduped.to_path_buf(), vec![cache.to_path_buf()]).check_cache(3),
             "Cache checking didn't fail when it should"
         );
 
