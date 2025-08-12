@@ -457,10 +457,17 @@ impl DedupCache {
 
     /// Writes the cache to a file, optionally compressing with zstd if extension suggests.
     fn write_to_file(&self, path: impl AsRef<Path>) {
-        std::fs::create_dir_all(path.as_ref().parent().unwrap()).unwrap();
+        let path = path.as_ref();
+
+        if path.file_name().is_none() {
+            return;
+        }
+
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+
         let writer = File::create(&path).map(BufWriter::new);
 
-        if path.as_ref().extension() == Some("zst".as_ref()) {
+        if path.extension() == Some("zst".as_ref()) {
             writer
                 .and_then(|writer| zstd::Encoder::new(writer, 0))
                 .map(|encoder| encoder.auto_finish())
@@ -601,6 +608,10 @@ impl Deduper {
 
     /// Atomically writes the internal cache back to its backing file.
     pub fn write_cache(&self) {
+        if self.cache_path.file_name().is_none() {
+            return;
+        }
+
         let temp_path = self.cache_path.clone().with_extension(format!(
             "tmp.{}.{}",
             SystemTime::now()
