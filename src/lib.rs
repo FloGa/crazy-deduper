@@ -212,6 +212,10 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use walkdir::WalkDir;
 
+use crate::cache::CacheOnDisk;
+
+mod cache;
+
 #[derive(Debug, Error)]
 pub enum Error {
     #[error(transparent)]
@@ -488,7 +492,7 @@ impl DedupCache {
     fn read_from_file(&mut self, path: impl AsRef<Path>) {
         let path = path.as_ref();
 
-        let cache_from_file: Vec<FileWithChunks> = {
+        let cache_from_file: CacheOnDisk = {
             let cache_from_file = read_cache_file(path);
             cache_from_file
                 .ok()
@@ -496,7 +500,7 @@ impl DedupCache {
                 .unwrap_or_default()
         };
 
-        for x in cache_from_file {
+        for x in cache_from_file.into_inner() {
             self.insert(x.path.clone(), x);
         }
     }
