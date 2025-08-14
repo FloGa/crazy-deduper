@@ -212,7 +212,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use walkdir::WalkDir;
 
-use crate::cache::CacheOnDisk;
+use crate::cache::{CacheOnDisk, CacheOnDiskBorrowed};
 
 mod cache;
 
@@ -535,7 +535,7 @@ impl DedupCache {
         let writer = get_cache_writer(&path);
 
         writer
-            .map(|writer| serde_json::to_writer(writer, &self.values().collect::<Vec<_>>()))
+            .map(|writer| serde_json::to_writer(writer, &CacheOnDiskBorrowed::from(self)))
             .unwrap()
             .unwrap();
     }
