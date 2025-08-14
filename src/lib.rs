@@ -280,6 +280,23 @@ fn read_cache_file(path: &Path) -> std::io::Result<String> {
     Ok(buffer)
 }
 
+/// Creates a cache writer for the specified path.
+///
+/// This function creates a writer that writes to the given path. If the file extension of the path
+/// is `.zst`, the writer will compress the data using Zstandard compression. Otherwise, it will
+/// use a buffered writer without compression.
+fn get_cache_writer(path: &Path) -> std::io::Result<Box<dyn Write>> {
+    let file = File::create(&path)?;
+    let writer = BufWriter::new(file);
+
+    Ok(if path.extension() == Some("zst".as_ref()) {
+        let encoder = zstd::Encoder::new(writer, 0)?.auto_finish();
+        Box::new(encoder)
+    } else {
+        Box::new(writer)
+    })
+}
+
 /// A lazily initialized optional value that can be serialized/deserialized via `Option<T>`.
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(from = "Option<T>")]
@@ -515,21 +532,12 @@ impl DedupCache {
 
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
 
-        let writer = File::create(&path).map(BufWriter::new);
+        let writer = get_cache_writer(&path);
 
-        if path.extension() == Some("zst".as_ref()) {
-            writer
-                .and_then(|writer| zstd::Encoder::new(writer, 0))
-                .map(|encoder| encoder.auto_finish())
-                .map(|writer| serde_json::to_writer(writer, &self.values().collect::<Vec<_>>()))
-                .unwrap()
-                .unwrap();
-        } else {
-            writer
-                .map(|writer| serde_json::to_writer(writer, &self.values().collect::<Vec<_>>()))
-                .unwrap()
-                .unwrap();
-        }
+        writer
+            .map(|writer| serde_json::to_writer(writer, &self.values().collect::<Vec<_>>()))
+            .unwrap()
+            .unwrap();
     }
 
     /// Iterates over all chunks, yielding the chunk hash, enriched `FileChunk` with path, and a
