@@ -254,6 +254,28 @@ fn read_at_chunk(file: &File, offset: u64, len: usize) -> std::io::Result<Vec<u8
     Ok(buf)
 }
 
+/// Reads a cache file from the specified path and returns its content as a `String`.
+///
+/// This function can handle regular text files as well as compressed files with
+/// a `.zst` extension (Zstandard-compressed files). If the file is compressed,
+/// it will automatically decompress it before returning the content.
+fn read_cache_file(path: &Path) -> std::io::Result<String> {
+    let file = File::open(path)?;
+    let reader = BufReader::new(file);
+
+    let mut reader: Box<dyn Read> = if path.extension() == Some("zst".as_ref()) {
+        let decoder = zstd::Decoder::with_buffer(reader)?;
+        Box::new(decoder)
+    } else {
+        Box::new(reader)
+    };
+
+    let mut buffer = String::new();
+    reader.read_to_string(&mut buffer)?;
+
+    Ok(buffer)
+}
+
 /// A lazily initialized optional value that can be serialized/deserialized via `Option<T>`.
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(from = "Option<T>")]
@@ -464,21 +486,15 @@ impl DedupCache {
 
     /// Reads cache entries from a file. Supports optional zstd compression based on extension.
     fn read_from_file(&mut self, path: impl AsRef<Path>) {
-        let reader = File::open(&path).map(BufReader::new);
+        let path = path.as_ref();
 
-        let cache_from_file: Vec<FileWithChunks> =
-            if path.as_ref().extension() == Some("zst".as_ref()) {
-                reader
-                    .and_then(zstd::Decoder::with_buffer)
-                    .map(|reader| serde_json::from_reader(reader))
-                    .map(|result| result.unwrap())
-                    .unwrap_or_default()
-            } else {
-                reader
-                    .map(|reader| serde_json::from_reader(reader))
-                    .map(|result| result.unwrap())
-                    .unwrap_or_default()
-            };
+        let cache_from_file: Vec<FileWithChunks> = {
+            let cache_from_file = read_cache_file(path);
+            cache_from_file
+                .ok()
+                .and_then(|s| serde_json::from_str(s.as_str()).ok())
+                .unwrap_or_default()
+        };
 
         for x in cache_from_file {
             self.insert(x.path.clone(), x);
