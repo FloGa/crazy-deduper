@@ -212,8 +212,6 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use walkdir::WalkDir;
 
-use crate::cache::{CacheOnDisk, CacheOnDiskBorrowed};
-
 mod cache;
 
 #[derive(Debug, Error)]
@@ -509,15 +507,15 @@ impl DedupCache {
     fn read_from_file(&mut self, path: impl AsRef<Path>) {
         let path = path.as_ref();
 
-        let cache_from_file: CacheOnDisk = {
+        let cache_from_file = {
             let cache_from_file = read_cache_file(path);
             cache_from_file
                 .ok()
-                .and_then(|s| serde_json::from_str(s.as_str()).ok())
+                .and_then(|s| cache::from_str(s.as_str()).ok())
                 .unwrap_or_default()
         };
 
-        for x in cache_from_file.into_inner() {
+        for x in cache_from_file {
             self.insert(x.path.clone(), x);
         }
     }
@@ -535,7 +533,7 @@ impl DedupCache {
         let writer = get_cache_writer(&path);
 
         writer
-            .map(|writer| serde_json::to_writer(writer, &CacheOnDiskBorrowed::from(self)))
+            .map(|writer| cache::to_writer(writer, self))
             .unwrap()
             .unwrap();
     }
