@@ -201,7 +201,6 @@ use std::collections::hash_map::IntoIter;
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write};
-use std::ops::Deref;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::SystemTime;
@@ -256,47 +255,6 @@ fn read_at_chunk(file: &File, offset: u64, len: usize) -> std::io::Result<Vec<u8
     Ok(buf)
 }
 
-/// A lazily initialized optional value that can be serialized/deserialized via `Option<T>`.
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
-#[serde(from = "Option<T>")]
-#[serde(into = "Option<T>")]
-struct LazyOption<T>(OnceCell<T>)
-where
-    T: Clone;
-
-impl<T> From<Option<T>> for LazyOption<T>
-where
-    T: Clone,
-{
-    fn from(value: Option<T>) -> Self {
-        Self(if let Some(value) = value {
-            OnceCell::from(value)
-        } else {
-            OnceCell::new()
-        })
-    }
-}
-
-impl<T> Into<Option<T>> for LazyOption<T>
-where
-    T: Clone,
-{
-    fn into(self) -> Option<T> {
-        self.0.get().cloned()
-    }
-}
-
-impl<T> Deref for LazyOption<T>
-where
-    T: Clone,
-{
-    type Target = OnceCell<T>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
 /// Supported hashing algorithms used to identify chunks.
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 pub enum HashingAlgorithm {
@@ -328,7 +286,7 @@ pub struct FileWithChunks {
     pub size: u64,
     /// Modification time of the file.
     pub mtime: SystemTime,
-    chunks: LazyOption<Vec<FileChunk>>,
+    chunks: OnceCell<Vec<FileChunk>>,
     hashing_algorithm: HashingAlgorithm,
 }
 

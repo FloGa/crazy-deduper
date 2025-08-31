@@ -1,9 +1,10 @@
 use std::borrow::Cow;
+use std::cell::OnceCell;
 use std::time::SystemTime;
 
 use serde::{Deserialize, Serialize};
 
-use crate::{DedupCache, FileChunk, FileWithChunks, HashingAlgorithm, LazyOption};
+use crate::{DedupCache, FileChunk, FileWithChunks, HashingAlgorithm};
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub(crate) struct FileWithChunksOnDisk<'a> {
@@ -36,11 +37,12 @@ impl From<FileWithChunksOnDisk<'_>> for FileWithChunks {
             path: value.path.into_owned(),
             size: value.size,
             mtime: value.mtime,
-            chunks: LazyOption::from(
-                value
-                    .chunks
-                    .map(|chunks| chunks.into_iter().map(FileChunk::from).collect()),
-            ),
+            chunks: value
+                .chunks
+                .map(|chunks| {
+                    OnceCell::from(chunks.into_iter().map(FileChunk::from).collect::<Vec<_>>())
+                })
+                .unwrap_or_default(),
             hashing_algorithm: value.hashing_algorithm,
         }
     }
