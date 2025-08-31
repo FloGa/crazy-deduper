@@ -2,7 +2,7 @@ use std::fs::File;
 use std::io::{BufReader, BufWriter, Read, Write};
 use std::path::Path;
 
-use crate::cache::v0::{CacheOnDisk, CacheOnDiskBorrowed};
+use crate::cache::v0::CacheOnDisk;
 use crate::{DedupCache, FileWithChunks};
 
 mod v0;
@@ -54,7 +54,7 @@ pub(crate) fn read_from_file(path: impl AsRef<Path>) -> Vec<FileWithChunks> {
         .ok()
         .and_then(|s| {
             serde_json::from_str::<CacheOnDisk>(&s)
-                .map(CacheOnDisk::into_inner)
+                .map(CacheOnDisk::into_owned)
                 .ok()
         })
         .unwrap_or_default()
@@ -72,7 +72,7 @@ pub(crate) fn write_to_file(path: impl AsRef<Path>, cache: &DedupCache) {
     let writer = get_cache_writer(&path);
 
     writer
-        .map(|writer| serde_json::to_writer(writer, &CacheOnDiskBorrowed::from(cache)))
+        .map(|writer| serde_json::to_writer(writer, &CacheOnDisk::from(cache)))
         .unwrap()
         .unwrap();
 }

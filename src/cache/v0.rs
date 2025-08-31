@@ -1,23 +1,91 @@
+use std::borrow::Cow;
+use std::time::SystemTime;
+
 use serde::{Deserialize, Serialize};
 
-use crate::{DedupCache, FileWithChunks};
+use crate::{DedupCache, FileChunk, FileWithChunks, HashingAlgorithm, LazyOption};
 
-#[derive(Default, Deserialize)]
-#[serde(transparent)]
-pub(crate) struct CacheOnDisk(Vec<FileWithChunks>);
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub(crate) struct FileWithChunksOnDisk<'a> {
+    path: Cow<'a, String>,
+    size: u64,
+    mtime: SystemTime,
+    chunks: Option<Vec<FileChunkOnDisk<'a>>>,
+    hashing_algorithm: HashingAlgorithm,
+}
 
-impl CacheOnDisk {
-    pub(crate) fn into_inner(self) -> Vec<FileWithChunks> {
-        self.0
+impl<'a> From<&'a FileWithChunks> for FileWithChunksOnDisk<'a> {
+    fn from(value: &'a FileWithChunks) -> Self {
+        Self {
+            path: Cow::Borrowed(&value.path),
+            size: value.size,
+            mtime: value.mtime,
+            chunks: value
+                .chunks
+                .get()
+                .map(|chunks| chunks.iter().map(FileChunkOnDisk::from).collect()),
+            hashing_algorithm: value.hashing_algorithm,
+        }
     }
 }
 
-#[derive(Serialize)]
-#[serde(transparent)]
-pub(crate) struct CacheOnDiskBorrowed<'a>(Vec<&'a FileWithChunks>);
+impl From<FileWithChunksOnDisk<'_>> for FileWithChunks {
+    fn from(value: FileWithChunksOnDisk) -> Self {
+        Self {
+            base: Default::default(),
+            path: value.path.into_owned(),
+            size: value.size,
+            mtime: value.mtime,
+            chunks: LazyOption::from(
+                value
+                    .chunks
+                    .map(|chunks| chunks.into_iter().map(FileChunk::from).collect()),
+            ),
+            hashing_algorithm: value.hashing_algorithm,
+        }
+    }
+}
 
-impl<'a> From<&'a DedupCache> for CacheOnDiskBorrowed<'a> {
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub(crate) struct FileChunkOnDisk<'a> {
+    start: u64,
+    size: u64,
+    hash: Cow<'a, String>,
+}
+
+impl<'a> From<&'a FileChunk> for FileChunkOnDisk<'a> {
+    fn from(value: &'a FileChunk) -> Self {
+        Self {
+            start: value.start,
+            size: value.size,
+            hash: Cow::Borrowed(&value.hash),
+        }
+    }
+}
+
+impl From<FileChunkOnDisk<'_>> for FileChunk {
+    fn from(value: FileChunkOnDisk) -> Self {
+        Self {
+            start: value.start,
+            size: value.size,
+            hash: value.hash.into_owned(),
+            path: None,
+        }
+    }
+}
+
+#[derive(Default, Deserialize, Serialize)]
+#[serde(transparent)]
+pub(crate) struct CacheOnDisk<'a>(Vec<FileWithChunksOnDisk<'a>>);
+
+impl<'a> CacheOnDisk<'a> {
+    pub(crate) fn into_owned(self) -> Vec<FileWithChunks> {
+        self.0.into_iter().map(FileWithChunks::from).collect()
+    }
+}
+
+impl<'a> From<&'a DedupCache> for CacheOnDisk<'a> {
     fn from(value: &'a DedupCache) -> Self {
-        CacheOnDiskBorrowed(value.values().collect())
+        CacheOnDisk(value.values().map(FileWithChunksOnDisk::from).collect())
     }
 }
