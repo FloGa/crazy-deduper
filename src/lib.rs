@@ -319,9 +319,8 @@ impl HashingAlgorithm {
 }
 
 /// Represents a file in the source tree along with its chunked representation.
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug)]
 pub struct FileWithChunks {
-    #[serde(skip)]
     base: PathBuf,
     /// Path of the file relative to the source root.
     pub path: String,
@@ -429,12 +428,11 @@ impl FileWithChunks {
 }
 
 /// A single chunk of a file, including its offset in the original file, size, and hash.
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug)]
 pub struct FileChunk {
     pub start: u64,
     pub size: u64,
     pub hash: String,
-    #[serde(skip)]
     pub path: Option<String>,
 }
 
