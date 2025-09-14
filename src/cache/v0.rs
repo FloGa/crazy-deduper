@@ -8,7 +8,8 @@ use crate::{DedupCache, FileChunk, FileWithChunks, HashingAlgorithm};
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub(crate) struct FileWithChunksOnDisk<'a> {
-    path: Cow<'a, String>,
+    #[serde(borrow)]
+    path: Cow<'a, str>,
     size: u64,
     mtime: SystemTime,
     chunks: Option<Vec<FileChunkOnDisk<'a>>>,
@@ -18,7 +19,7 @@ pub(crate) struct FileWithChunksOnDisk<'a> {
 impl<'a> From<&'a FileWithChunks> for FileWithChunksOnDisk<'a> {
     fn from(value: &'a FileWithChunks) -> Self {
         Self {
-            path: Cow::Borrowed(&value.path),
+            path: value.path.as_str().into(),
             size: value.size,
             mtime: value.mtime,
             chunks: value
@@ -34,7 +35,7 @@ impl From<FileWithChunksOnDisk<'_>> for FileWithChunks {
     fn from(value: FileWithChunksOnDisk) -> Self {
         Self {
             base: Default::default(),
-            path: value.path.into_owned(),
+            path: value.path.to_string(),
             size: value.size,
             mtime: value.mtime,
             chunks: value
@@ -52,7 +53,7 @@ impl From<FileWithChunksOnDisk<'_>> for FileWithChunks {
 pub(crate) struct FileChunkOnDisk<'a> {
     start: u64,
     size: u64,
-    hash: Cow<'a, String>,
+    hash: &'a str,
 }
 
 impl<'a> From<&'a FileChunk> for FileChunkOnDisk<'a> {
@@ -60,7 +61,7 @@ impl<'a> From<&'a FileChunk> for FileChunkOnDisk<'a> {
         Self {
             start: value.start,
             size: value.size,
-            hash: Cow::Borrowed(&value.hash),
+            hash: value.hash.as_str(),
         }
     }
 }
@@ -70,7 +71,7 @@ impl From<FileChunkOnDisk<'_>> for FileChunk {
         Self {
             start: value.start,
             size: value.size,
-            hash: value.hash.into_owned(),
+            hash: value.hash.to_owned(),
             path: None,
         }
     }
@@ -78,7 +79,7 @@ impl From<FileChunkOnDisk<'_>> for FileChunk {
 
 #[derive(Default, Deserialize, Serialize)]
 #[serde(transparent)]
-pub(crate) struct CacheOnDisk<'a>(Vec<FileWithChunksOnDisk<'a>>);
+pub(crate) struct CacheOnDisk<'a>(#[serde(borrow)] Vec<FileWithChunksOnDisk<'a>>);
 
 impl<'a> CacheOnDisk<'a> {
     pub(crate) fn into_owned(self) -> Vec<FileWithChunks> {
