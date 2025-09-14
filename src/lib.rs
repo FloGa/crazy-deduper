@@ -907,4 +907,58 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn check_files_with_exotic_characters() -> anyhow::Result<()> {
+        let temp = TempDir::new()?;
+
+        let origin = temp.child("origin");
+        origin.create_dir_all()?;
+
+        let deduped = temp.child("deduped");
+        deduped.create_dir_all()?;
+
+        let cache = temp.child("cache.json");
+
+        let filename_with_newline = "new\nline.txt";
+        let file_with_newline = origin.child(filename_with_newline);
+        file_with_newline.write_str("content")?;
+
+        let filename_with_japanese = "日本語ファイル名";
+        let file_with_japanese = origin.child(filename_with_japanese);
+        file_with_japanese.write_str("content")?;
+
+        let try_dedup = || -> anyhow::Result<()> {
+            let mut deduper = Deduper::new(
+                origin.to_path_buf(),
+                vec![cache.to_path_buf()],
+                HashingAlgorithm::MD5,
+                true,
+            );
+
+            assert!(
+                deduper.cache.get(&filename_with_newline).is_some(),
+                "File with newline is missing from cache"
+            );
+
+            assert!(
+                deduper.cache.get(&filename_with_japanese).is_some(),
+                "File with Japanese is missing from cache"
+            );
+
+            deduper.write_chunks(deduped.to_path_buf(), 3)?;
+
+            deduper.write_cache();
+
+            Ok(())
+        };
+
+        // First run with cold cache
+        try_dedup()?;
+
+        // Second run with hot cache
+        try_dedup()?;
+
+        Ok(())
+    }
 }
