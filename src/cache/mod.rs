@@ -2,10 +2,13 @@ use std::fs::File;
 use std::io::{BufReader, BufWriter, Read, Write};
 use std::path::Path;
 
-use crate::cache::v0::CacheOnDisk;
+use serde::{Deserialize, Serialize};
+
 use crate::{DedupCache, FileWithChunks};
 
 mod v0;
+mod v1;
+use v1 as latest;
 
 /// Reads a cache file from the specified path and returns its content as a `String`.
 ///
@@ -46,6 +49,40 @@ fn get_cache_writer(path: &Path) -> std::io::Result<Box<dyn Write>> {
     })
 }
 
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(tag = "v")]
+enum CacheOnDisk<'a> {
+    #[serde(rename = "1")]
+    V1 {
+        #[serde(borrow)]
+        c: v1::CacheOnDisk<'a>,
+    },
+    #[serde(untagged, skip_serializing)]
+    V0(v0::CacheOnDisk<'a>),
+}
+
+impl<'a> CacheOnDisk<'a> {
+    fn parse(json: &'a str) -> serde_json::Result<CacheOnDisk<'a>> {
+        serde_json::from_str(json)
+    }
+
+    fn migrate(self) -> Option<Self> {
+        match self {
+            CacheOnDisk::V0(v0) => Some(CacheOnDisk::V1 { c: v0.into() }),
+            CacheOnDisk::V1 { .. } => None,
+        }
+    }
+
+    fn into_latest(self) -> latest::CacheOnDisk<'a> {
+        if let CacheOnDisk::V1 { c: cache } = self {
+            cache
+        } else {
+            // We are checking for the latest, so we can safely unwrap.
+            self.migrate().unwrap().into_latest()
+        }
+    }
+}
+
 pub(crate) fn read_from_file(path: impl AsRef<Path>) -> Vec<FileWithChunks> {
     let path = path.as_ref();
 
@@ -53,8 +90,9 @@ pub(crate) fn read_from_file(path: impl AsRef<Path>) -> Vec<FileWithChunks> {
     cache_from_file
         .ok()
         .and_then(|s| {
-            serde_json::from_str::<CacheOnDisk>(&s)
-                .map(CacheOnDisk::into_owned)
+            CacheOnDisk::parse(&s)
+                .map(CacheOnDisk::into_latest)
+                .map(latest::CacheOnDisk::into_owned)
                 .ok()
         })
         .unwrap_or_default()
@@ -71,8 +109,12 @@ pub(crate) fn write_to_file(path: impl AsRef<Path>, cache: &DedupCache) {
 
     let writer = get_cache_writer(&path);
 
+    let versioned_cache = CacheOnDisk::V1 {
+        c: latest::CacheOnDisk::from(cache),
+    };
+
     writer
-        .map(|writer| serde_json::to_writer(writer, &CacheOnDisk::from(cache)))
+        .map(|writer| serde_json::to_writer(writer, &versioned_cache))
         .unwrap()
         .unwrap();
 }
