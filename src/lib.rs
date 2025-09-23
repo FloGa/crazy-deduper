@@ -256,9 +256,10 @@ fn read_at_chunk(file: &File, offset: u64, len: usize) -> std::io::Result<Vec<u8
 }
 
 /// Supported hashing algorithms used to identify chunks.
-#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize)]
 pub enum HashingAlgorithm {
     MD5,
+    #[default]
     SHA1,
     SHA256,
     SHA512,

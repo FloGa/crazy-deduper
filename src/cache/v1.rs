@@ -14,7 +14,6 @@ pub(crate) struct FileWithChunksOnDisk<'a> {
     size: u64,
     mtime: SystemTime,
     chunks: Option<Vec<FileChunkOnDisk<'a>>>,
-    hashing_algorithm: HashingAlgorithm,
 }
 
 impl<'a> From<&'a FileWithChunks> for FileWithChunksOnDisk<'a> {
@@ -27,7 +26,6 @@ impl<'a> From<&'a FileWithChunks> for FileWithChunksOnDisk<'a> {
                 .chunks
                 .get()
                 .map(|chunks| chunks.iter().map(FileChunkOnDisk::from).collect()),
-            hashing_algorithm: value.hashing_algorithm,
         }
     }
 }
@@ -45,7 +43,7 @@ impl From<FileWithChunksOnDisk<'_>> for FileWithChunks {
                     OnceCell::from(chunks.into_iter().map(FileChunk::from).collect::<Vec<_>>())
                 })
                 .unwrap_or_default(),
-            hashing_algorithm: value.hashing_algorithm,
+            hashing_algorithm: Default::default(),
         }
     }
 }
@@ -79,13 +77,22 @@ impl From<FileChunkOnDisk<'_>> for FileChunk {
 }
 
 #[derive(Debug, Default, Deserialize, Serialize)]
-#[serde(transparent)]
-pub(crate) struct CacheOnDisk<'a>(#[serde(borrow)] Vec<FileWithChunksOnDisk<'a>>);
+pub(crate) struct CacheOnDisk<'a> {
+    #[serde(borrow)]
+    files: Vec<FileWithChunksOnDisk<'a>>,
+    hashing_algorithm: HashingAlgorithm,
+}
 
 impl<'a> From<v0::CacheOnDisk<'a>> for CacheOnDisk<'a> {
     fn from(value: v0::CacheOnDisk<'a>) -> Self {
-        Self(
-            value
+        Self {
+            hashing_algorithm: value
+                .0
+                .iter()
+                .map(|fwcd| fwcd.hashing_algorithm)
+                .next()
+                .unwrap_or_default(),
+            files: value
                 .0
                 .into_iter()
                 .map(|fwcd| FileWithChunksOnDisk {
@@ -102,21 +109,33 @@ impl<'a> From<v0::CacheOnDisk<'a>> for CacheOnDisk<'a> {
                             })
                             .collect()
                     }),
-                    hashing_algorithm: fwcd.hashing_algorithm,
                 })
                 .collect(),
-        )
+        }
     }
 }
 
 impl<'a> CacheOnDisk<'a> {
     pub(crate) fn into_owned(self) -> Vec<FileWithChunks> {
-        self.0.into_iter().map(FileWithChunks::from).collect()
+        self.files
+            .into_iter()
+            .map(|fwcd| FileWithChunks {
+                hashing_algorithm: self.hashing_algorithm,
+                ..FileWithChunks::from(fwcd)
+            })
+            .collect()
     }
 }
 
 impl<'a> From<&'a DedupCache> for CacheOnDisk<'a> {
     fn from(value: &'a DedupCache) -> Self {
-        CacheOnDisk(value.values().map(FileWithChunksOnDisk::from).collect())
+        CacheOnDisk {
+            hashing_algorithm: value
+                .values()
+                .map(|fwc| fwc.hashing_algorithm)
+                .next()
+                .unwrap_or_default(),
+            files: value.values().map(FileWithChunksOnDisk::from).collect(),
+        }
     }
 }
