@@ -339,7 +339,7 @@ impl FileWithChunks {
             let chunks = self.calculate_chunks()?;
 
             // Cannot panic, we already checked that it is empty.
-            self.chunks.set(chunks.clone()).unwrap();
+            self.chunks.set(chunks).unwrap();
         }
 
         Ok(self.chunks.get().unwrap())
