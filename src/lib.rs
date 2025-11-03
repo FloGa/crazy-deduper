@@ -666,37 +666,47 @@ impl Hydrator {
         }
     }
 
-    /// Check if all chunk files listed in the cache are present in source directory.
-    pub fn check_cache(&self, declutter_levels: usize) -> bool {
-        let mut success = true;
-
-        let path_data = self.source_path.join("data");
-        for (hash, meta) in self
+    /// List missing chunks or chunks with wrong size.
+    pub fn list_missing_chunks(
+        &self,
+        declutter_levels: usize,
+    ) -> impl Iterator<Item = (PathBuf, String)> {
+        let mut hashes_and_chunks = self
             .cache
             .get_chunks()
             .unwrap()
-            .map(|(hash, meta, ..)| (PathBuf::from(hash), meta))
-        {
-            let path = path_data.join(FileDeclutter::oneshot(hash, declutter_levels));
+            .map(|(hash, chunk, ..)| (PathBuf::from(hash), chunk))
+            .collect::<Vec<_>>();
+        hashes_and_chunks.sort_by(|a, b| a.0.cmp(&b.0));
+        hashes_and_chunks.dedup_by(|a, b| a.0 == b.0);
 
-            if !path.exists() {
-                eprintln!("Does not exist: {}", path.display());
-                success = false;
-                continue;
-            }
+        let (hashes, chunks): (Vec<_>, Vec<_>) = hashes_and_chunks.into_iter().unzip();
 
-            if path.metadata().unwrap().len() != meta.size {
-                eprintln!(
-                    "Does not have expected size of {}: {}",
-                    meta.size,
-                    path.display()
-                );
-                success = false;
-                continue;
-            }
-        }
+        let files_in_cache = FileDeclutter::new_from_iter(hashes.into_iter())
+            .base(&self.source_path.join("data"))
+            .levels(declutter_levels)
+            .map(|(_, path)| path);
 
-        success
+        files_in_cache
+            .zip(chunks)
+            .into_iter()
+            .filter_map(|(path, chunk)| {
+                if !path.exists() {
+                    Some((path, "Does not exist".to_string()))
+                } else if path.metadata().unwrap().len() != chunk.size {
+                    Some((
+                        path,
+                        format!("Does not have expected size of {}", chunk.size),
+                    ))
+                } else {
+                    None
+                }
+            })
+    }
+
+    /// Check if all chunk files listed in the cache are present in source directory.
+    pub fn check_cache(&self, declutter_levels: usize) -> bool {
+        self.list_missing_chunks(declutter_levels).next().is_none()
     }
 
     /// List files in source directory that are not listed in cache.
