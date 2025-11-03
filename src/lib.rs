@@ -334,6 +334,7 @@ impl FileWithChunks {
         self.chunks.get()
     }
 
+    /// Returns existing chunks or computes them if absent.
     pub fn get_or_calculate_chunks(&self) -> Result<&Vec<FileChunk>> {
         if self.chunks.get().is_none() {
             let chunks = self.calculate_chunks()?;
@@ -345,7 +346,6 @@ impl FileWithChunks {
         Ok(self.chunks.get().unwrap())
     }
 
-    /// Returns existing chunks or computes them if absent.
     fn calculate_chunks(&self) -> Result<Vec<FileChunk>> {
         let path = self.base.join(&self.path);
 
