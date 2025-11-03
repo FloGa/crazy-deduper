@@ -334,6 +334,11 @@ impl FileWithChunks {
         self.chunks.get()
     }
 
+    /// Returns already computed chunks if present and consumes them.
+    pub fn take_chunks(&mut self) -> Option<Vec<FileChunk>> {
+        self.chunks.take()
+    }
+
     /// Returns existing chunks or computes them if absent.
     pub fn get_or_calculate_chunks(&self) -> Result<&Vec<FileChunk>> {
         if self.chunks.get().is_none() {
