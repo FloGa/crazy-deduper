@@ -924,6 +924,7 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(not(windows))]
     #[test]
     fn check_files_with_exotic_characters() -> anyhow::Result<()> {
         let temp = TempDir::new()?;
