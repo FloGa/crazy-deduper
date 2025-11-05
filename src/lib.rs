@@ -241,7 +241,7 @@ fn read_at_chunk(file: &File, offset: u64, len: usize) -> std::io::Result<Vec<u8
 fn read_at_chunk(file: &File, offset: u64, len: usize) -> std::io::Result<Vec<u8>> {
     use std::os::windows::fs::FileExt;
     // Create a clone of the file handle for parallel access.
-    let mut handle = file.try_clone()?;
+    let handle = file.try_clone()?;
     let mut buf = vec![0u8; len];
     let mut pos = 0usize;
     while pos < len {
