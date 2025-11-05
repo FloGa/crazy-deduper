@@ -31,6 +31,13 @@
     Furthermore, the cache format version is implemented in a way that it will always be backward compatible. Older
     cache formats will always be valid for reading. For writing, the latest cache format will be used.
 
+-   Add delegate method to OnceCell::take
+
+-   Add separate method to list missing chunks
+
+    That way, the check_cache method can access this list and fail fast and
+    silently.
+
 # Changes in 0.1.0
 
 Initial release.
