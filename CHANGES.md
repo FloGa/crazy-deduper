@@ -1,3 +1,5 @@
+# Changes since latest release
+
 # Changes in 0.2.0
 
 -   Open with write permission to set modtime
