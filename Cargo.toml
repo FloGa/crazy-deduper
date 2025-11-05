@@ -1,6 +1,6 @@
 [package]
 name = "crazy-deduper"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 
 authors = ["Florian Gamböck <mail@floga.de>"]
@@ -10,10 +10,11 @@ readme = "README.md"
 categories = ["command-line-utilities", "filesystem"]
 keywords = ["cli", "file", "utility"]
 license = "MIT"
+include = ["src/**/*", "LICENSE", "README.md"]
 
 [dependencies]
 anyhow = "1.0.75"
-base16ct = { version = "0.2.0", features = ["alloc"] }
+base16ct = { version = "0.3.0", features = ["alloc"] }
 clap = { version = "4.4.8", features = ["derive"] }
 file-declutter = "0.1.0"
 md-5 = "0.10.6"

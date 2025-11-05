@@ -20,5 +20,5 @@ fn correct_version() {
         .arg("--version")
         .assert()
         .success()
-        .stdout(format!("{} {}\n", common::BIN_NAME, version));
+        .stdout(format!("{} {}\n", &*common::BIN_NAME, version));
 }

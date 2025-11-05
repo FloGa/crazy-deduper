@@ -30,7 +30,7 @@ fn check_public_properties() -> Result<()> {
     let fcw = cache.values().next().unwrap();
     assert_eq!(PathBuf::from(&fcw.path), file.strip_prefix(&source)?);
 
-    let chunks = fcw.get_or_calculate_chunks().unwrap();
+    let chunks = fcw.get_or_calculate_chunks()?;
     assert_eq!(chunks.len(), 1, "Number of chunks is not 1");
 
     let chunk = chunks.get(0).unwrap();

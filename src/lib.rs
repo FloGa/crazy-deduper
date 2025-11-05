@@ -201,8 +201,8 @@ use std::collections::hash_map::IntoIter;
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write};
-use std::ops::Deref;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::SystemTime;
 
 use file_declutter::FileDeclutter;
@@ -210,6 +210,8 @@ use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use walkdir::WalkDir;
+
+mod cache;
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -219,51 +221,45 @@ pub enum Error {
 
 type Result<R> = std::result::Result<R, Error>;
 
-/// A lazily initialized optional value that can be serialized/deserialized via `Option<T>`.
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
-#[serde(from = "Option<T>")]
-#[serde(into = "Option<T>")]
-struct LazyOption<T>(OnceCell<T>)
-where
-    T: Clone;
-
-impl<T> From<Option<T>> for LazyOption<T>
-where
-    T: Clone,
-{
-    fn from(value: Option<T>) -> Self {
-        Self(if let Some(value) = value {
-            OnceCell::from(value)
-        } else {
-            OnceCell::new()
-        })
+#[cfg(unix)]
+fn read_at_chunk(file: &File, offset: u64, len: usize) -> std::io::Result<Vec<u8>> {
+    use std::os::unix::fs::FileExt;
+    let mut buf = vec![0u8; len];
+    let mut pos = 0usize;
+    while pos < len {
+        let read = file.read_at(&mut buf[pos..], offset + pos as u64)?;
+        if read == 0 {
+            break;
+        }
+        pos += read;
     }
+    buf.truncate(pos);
+    Ok(buf)
 }
 
-impl<T> Into<Option<T>> for LazyOption<T>
-where
-    T: Clone,
-{
-    fn into(self) -> Option<T> {
-        self.0.get().cloned()
+#[cfg(windows)]
+fn read_at_chunk(file: &File, offset: u64, len: usize) -> std::io::Result<Vec<u8>> {
+    use std::os::windows::fs::FileExt;
+    // Create a clone of the file handle for parallel access.
+    let handle = file.try_clone()?;
+    let mut buf = vec![0u8; len];
+    let mut pos = 0usize;
+    while pos < len {
+        let read = handle.seek_read(&mut buf[pos..], offset + pos as u64)?;
+        if read == 0 {
+            break;
+        }
+        pos += read;
     }
-}
-
-impl<T> Deref for LazyOption<T>
-where
-    T: Clone,
-{
-    type Target = OnceCell<T>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
+    buf.truncate(pos);
+    Ok(buf)
 }
 
 /// Supported hashing algorithms used to identify chunks.
-#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize)]
 pub enum HashingAlgorithm {
     MD5,
+    #[default]
     SHA1,
     SHA256,
     SHA512,
@@ -282,9 +278,8 @@ impl HashingAlgorithm {
 }
 
 /// Represents a file in the source tree along with its chunked representation.
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug)]
 pub struct FileWithChunks {
-    #[serde(skip)]
     base: PathBuf,
     /// Path of the file relative to the source root.
     pub path: String,
@@ -292,7 +287,7 @@ pub struct FileWithChunks {
     pub size: u64,
     /// Modification time of the file.
     pub mtime: SystemTime,
-    chunks: LazyOption<Vec<FileChunk>>,
+    chunks: OnceCell<Vec<FileChunk>>,
     hashing_algorithm: HashingAlgorithm,
 }
 
@@ -339,18 +334,23 @@ impl FileWithChunks {
         self.chunks.get()
     }
 
+    /// Returns already computed chunks if present and consumes them.
+    pub fn take_chunks(&mut self) -> Option<Vec<FileChunk>> {
+        self.chunks.take()
+    }
+
+    /// Returns existing chunks or computes them if absent.
     pub fn get_or_calculate_chunks(&self) -> Result<&Vec<FileChunk>> {
         if self.chunks.get().is_none() {
             let chunks = self.calculate_chunks()?;
 
             // Cannot panic, we already checked that it is empty.
-            self.chunks.set(chunks.clone()).unwrap();
+            self.chunks.set(chunks).unwrap();
         }
 
         Ok(self.chunks.get().unwrap())
     }
 
-    /// Returns existing chunks or computes them if absent.
     fn calculate_chunks(&self) -> Result<Vec<FileChunk>> {
         let path = self.base.join(&self.path);
 
@@ -367,29 +367,24 @@ impl FileWithChunks {
 
             std::iter::once(Ok::<FileChunk, Error>(FileChunk::new(0, 0, hash))).collect()
         } else {
-            (0..(size + chunk_size - 1) / chunk_size)
-                .into_par_iter()
-                .map(|start| {
-                    let mut input = BufReader::new(File::open(&path)?);
-                    input.seek(SeekFrom::Start(start * chunk_size)).unwrap();
+            // Open file once and read it in parallel.
+            let file = Arc::new(File::open(&path)?);
+            let total_chunks = (size + chunk_size - 1) / chunk_size;
 
-                    let chunk = input
-                        .bytes()
-                        .by_ref()
-                        .take(chunk_size as usize)
-                        .flatten()
-                        .collect::<Vec<_>>();
+            (0..total_chunks)
+                .into_par_iter()
+                .map(|chunk_idx| {
+                    let offset = chunk_idx * chunk_size;
+                    let len = chunk_size.min(size.saturating_sub(offset)) as usize;
+
+                    let data = read_at_chunk(&file, offset, len)?;
 
                     let mut hasher = hashing_algorithm.select_hasher();
-                    hasher.update(&chunk);
+                    hasher.update(&data);
                     let hash = hasher.finalize();
                     let hash = base16ct::lower::encode_string(&hash);
 
-                    Ok::<FileChunk, Error>(FileChunk::new(
-                        start * chunk_size,
-                        chunk.len() as u64,
-                        hash,
-                    ))
+                    Ok::<FileChunk, Error>(FileChunk::new(offset, data.len() as u64, hash))
                 })
                 .collect()
         }
@@ -397,12 +392,11 @@ impl FileWithChunks {
 }
 
 /// A single chunk of a file, including its offset in the original file, size, and hash.
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug)]
 pub struct FileChunk {
     pub start: u64,
     pub size: u64,
     pub hash: String,
-    #[serde(skip)]
     pub path: Option<String>,
 }
 
@@ -434,21 +428,7 @@ impl DedupCache {
 
     /// Reads cache entries from a file. Supports optional zstd compression based on extension.
     fn read_from_file(&mut self, path: impl AsRef<Path>) {
-        let reader = File::open(&path).map(BufReader::new);
-
-        let cache_from_file: Vec<FileWithChunks> =
-            if path.as_ref().extension() == Some("zst".as_ref()) {
-                reader
-                    .and_then(zstd::Decoder::with_buffer)
-                    .map(|reader| serde_json::from_reader(reader))
-                    .map(|result| result.unwrap())
-                    .unwrap_or_default()
-            } else {
-                reader
-                    .map(|reader| serde_json::from_reader(reader))
-                    .map(|result| result.unwrap())
-                    .unwrap_or_default()
-            };
+        let cache_from_file = cache::read_from_file(path);
 
         for x in cache_from_file {
             self.insert(x.path.clone(), x);
@@ -457,22 +437,7 @@ impl DedupCache {
 
     /// Writes the cache to a file, optionally compressing with zstd if extension suggests.
     fn write_to_file(&self, path: impl AsRef<Path>) {
-        std::fs::create_dir_all(path.as_ref().parent().unwrap()).unwrap();
-        let writer = File::create(&path).map(BufWriter::new);
-
-        if path.as_ref().extension() == Some("zst".as_ref()) {
-            writer
-                .and_then(|writer| zstd::Encoder::new(writer, 0))
-                .map(|encoder| encoder.auto_finish())
-                .map(|writer| serde_json::to_writer(writer, &self.values().collect::<Vec<_>>()))
-                .unwrap()
-                .unwrap();
-        } else {
-            writer
-                .map(|writer| serde_json::to_writer(writer, &self.values().collect::<Vec<_>>()))
-                .unwrap()
-                .unwrap();
-        }
+        cache::write_to_file(path, self);
     }
 
     /// Iterates over all chunks, yielding the chunk hash, enriched `FileChunk` with path, and a
@@ -601,6 +566,10 @@ impl Deduper {
 
     /// Atomically writes the internal cache back to its backing file.
     pub fn write_cache(&self) {
+        if self.cache_path.file_name().is_none() {
+            return;
+        }
+
         let temp_path = self.cache_path.clone().with_extension(format!(
             "tmp.{}.{}",
             SystemTime::now()
@@ -637,15 +606,12 @@ impl Deduper {
             if !chunk_file.exists() {
                 std::fs::create_dir_all(&chunk_file.parent().unwrap())?;
                 let mut out = File::create(chunk_file)?;
-                let data_in = BufReader::new(File::open(
+                let mut src = BufReader::new(File::open(
                     self.source_path.join(chunk.path.as_ref().unwrap()),
-                )?)
-                .bytes()
-                .skip(chunk.start as usize)
-                .take(chunk.size as usize)
-                .flatten()
-                .collect::<Vec<_>>();
-                out.write_all(&data_in)?;
+                )?);
+                src.seek(SeekFrom::Start(chunk.start))?;
+                let mut limited = src.take(chunk.size);
+                std::io::copy(&mut limited, &mut out)?;
             }
         }
 
@@ -700,37 +666,47 @@ impl Hydrator {
         }
     }
 
-    /// Check if all chunk files listed in the cache are present in source directory.
-    pub fn check_cache(&self) -> bool {
-        let mut success = true;
-
-        let path_data = self.source_path.join("data");
-        for (hash, meta) in self
+    /// List missing chunks or chunks with wrong size.
+    pub fn list_missing_chunks(
+        &self,
+        declutter_levels: usize,
+    ) -> impl Iterator<Item = (PathBuf, String)> {
+        let mut hashes_and_chunks = self
             .cache
             .get_chunks()
             .unwrap()
-            .map(|(hash, meta, ..)| (PathBuf::from(hash), meta))
-        {
-            let path = path_data.join(FileDeclutter::oneshot(hash, 3));
+            .map(|(hash, chunk, ..)| (PathBuf::from(hash), chunk))
+            .collect::<Vec<_>>();
+        hashes_and_chunks.sort_by(|a, b| a.0.cmp(&b.0));
+        hashes_and_chunks.dedup_by(|a, b| a.0 == b.0);
 
-            if !path.exists() {
-                eprintln!("Does not exist: {}", path.display());
-                success = false;
-                continue;
-            }
+        let (hashes, chunks): (Vec<_>, Vec<_>) = hashes_and_chunks.into_iter().unzip();
 
-            if path.metadata().unwrap().len() != meta.size {
-                eprintln!(
-                    "Does not have expected size of {}: {}",
-                    meta.size,
-                    path.display()
-                );
-                success = false;
-                continue;
-            }
-        }
+        let files_in_cache = FileDeclutter::new_from_iter(hashes.into_iter())
+            .base(&self.source_path.join("data"))
+            .levels(declutter_levels)
+            .map(|(_, path)| path);
 
-        success
+        files_in_cache
+            .zip(chunks)
+            .into_iter()
+            .filter_map(|(path, chunk)| {
+                if !path.exists() {
+                    Some((path, "Does not exist".to_string()))
+                } else if path.metadata().unwrap().len() != chunk.size {
+                    Some((
+                        path,
+                        format!("Does not have expected size of {}", chunk.size),
+                    ))
+                } else {
+                    None
+                }
+            })
+    }
+
+    /// Check if all chunk files listed in the cache are present in source directory.
+    pub fn check_cache(&self, declutter_levels: usize) -> bool {
+        self.list_missing_chunks(declutter_levels).next().is_none()
     }
 
     /// List files in source directory that are not listed in cache.
@@ -774,6 +750,8 @@ impl Hydrator {
 
 #[cfg(test)]
 mod tests {
+    use std::fs::OpenOptions;
+
     use assert_fs::fixture::ChildPath;
     use assert_fs::prelude::*;
     use assert_fs::{NamedTempFile, TempDir};
@@ -825,7 +803,12 @@ mod tests {
         assert_eq!(fwc_1, fwc_1_same);
         assert_ne!(fwc_1, fwc_2);
 
-        File::open(&file_1)?.set_modified(SystemTime::now())?;
+        // Some operating systems like Windows need write access to the file to be able to set the
+        // modified time.
+        OpenOptions::new()
+            .write(true)
+            .open(&file_1)?
+            .set_modified(SystemTime::now())?;
 
         let fwc_1_new =
             FileWithChunks::try_new(&temp.path(), &file_1.path(), HashingAlgorithm::MD5)?;
@@ -883,14 +866,14 @@ mod tests {
         let (_temp, _origin, deduped, cache) = setup()?;
 
         assert!(
-            Hydrator::new(deduped.to_path_buf(), vec![cache.to_path_buf()]).check_cache(),
+            Hydrator::new(deduped.to_path_buf(), vec![cache.to_path_buf()]).check_cache(3),
             "Cache checking failed when it shouldn't"
         );
 
         std::fs::remove_dir_all(deduped.child("data").read_dir()?.next().unwrap()?.path())?;
 
         assert!(
-            !Hydrator::new(deduped.to_path_buf(), vec![cache.to_path_buf()]).check_cache(),
+            !Hydrator::new(deduped.to_path_buf(), vec![cache.to_path_buf()]).check_cache(3),
             "Cache checking didn't fail when it should"
         );
 
@@ -937,6 +920,61 @@ mod tests {
             2,
             "Number of extra files present is not 2"
         );
+
+        Ok(())
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn check_files_with_exotic_characters() -> anyhow::Result<()> {
+        let temp = TempDir::new()?;
+
+        let origin = temp.child("origin");
+        origin.create_dir_all()?;
+
+        let deduped = temp.child("deduped");
+        deduped.create_dir_all()?;
+
+        let cache = temp.child("cache.json");
+
+        let filename_with_newline = "new\nline.txt";
+        let file_with_newline = origin.child(filename_with_newline);
+        file_with_newline.write_str("content")?;
+
+        let filename_with_japanese = "日本語ファイル名";
+        let file_with_japanese = origin.child(filename_with_japanese);
+        file_with_japanese.write_str("content")?;
+
+        let try_dedup = || -> anyhow::Result<()> {
+            let mut deduper = Deduper::new(
+                origin.to_path_buf(),
+                vec![cache.to_path_buf()],
+                HashingAlgorithm::MD5,
+                true,
+            );
+
+            assert!(
+                deduper.cache.get(&filename_with_newline).is_some(),
+                "File with newline is missing from cache"
+            );
+
+            assert!(
+                deduper.cache.get(&filename_with_japanese).is_some(),
+                "File with Japanese is missing from cache"
+            );
+
+            deduper.write_chunks(deduped.to_path_buf(), 3)?;
+
+            deduper.write_cache();
+
+            Ok(())
+        };
+
+        // First run with cold cache
+        try_dedup()?;
+
+        // Second run with hot cache
+        try_dedup()?;
 
         Ok(())
     }

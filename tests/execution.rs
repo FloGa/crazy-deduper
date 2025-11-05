@@ -1,5 +1,5 @@
 use std::fs;
-use std::fs::File;
+use std::fs::OpenOptions;
 use std::ops::Add;
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime};
@@ -264,7 +264,10 @@ fn modified_files_same_cache() -> Result<()> {
     fn setup_origin_1(path_origin: &ChildPath) -> Result<()> {
         let child = path_origin.child("file");
         fs::write(&child, "1")?;
-        File::open(&child)?.set_modified(SystemTime::UNIX_EPOCH)?;
+        OpenOptions::new()
+            .write(true)
+            .open(&child)?
+            .set_modified(SystemTime::UNIX_EPOCH)?;
         Ok(())
     }
 
@@ -272,7 +275,10 @@ fn modified_files_same_cache() -> Result<()> {
     fn setup_origin_2(path_origin: &ChildPath) -> Result<()> {
         let child = path_origin.child("file");
         fs::write(&child, "2")?;
-        File::open(&child)?.set_modified(SystemTime::UNIX_EPOCH.add(Duration::new(1, 0)))?;
+        OpenOptions::new()
+            .write(true)
+            .open(&child)?
+            .set_modified(SystemTime::UNIX_EPOCH.add(Duration::new(1, 0)))?;
         Ok(())
     }
 
@@ -280,7 +286,10 @@ fn modified_files_same_cache() -> Result<()> {
     fn setup_origin_12(path_origin: &ChildPath) -> Result<()> {
         let child = path_origin.child("file");
         fs::write(&child, "12")?;
-        File::open(&child)?.set_modified(SystemTime::UNIX_EPOCH.add(Duration::new(1, 0)))?;
+        OpenOptions::new()
+            .write(true)
+            .open(&child)?
+            .set_modified(SystemTime::UNIX_EPOCH.add(Duration::new(1, 0)))?;
         Ok(())
     }
 
