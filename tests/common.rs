@@ -2,8 +2,7 @@ use std::path::PathBuf;
 
 use lazy_static::lazy_static;
 
-pub const BIN_NAME: &str = "crazy-deduper";
-
 lazy_static! {
-    pub static ref BIN_PATH: PathBuf = assert_cmd::cargo::cargo_bin(BIN_NAME);
+    pub static ref BIN_PATH: PathBuf = assert_cmd::cargo::cargo_bin!("crazy-deduper").to_path_buf();
+    pub static ref BIN_NAME: String = BIN_PATH.file_name().unwrap().to_str().unwrap().to_string();
 }
