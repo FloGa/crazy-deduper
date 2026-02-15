@@ -210,7 +210,7 @@ dependencies = [
 
 [[package]]
 name = "crazy-deduper"
-version = "0.2.1"
+version = "0.3.0-SNAPSHOT"
 dependencies = [
  "anyhow",
  "assert_cmd",
