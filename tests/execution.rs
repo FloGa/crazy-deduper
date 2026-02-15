@@ -377,3 +377,39 @@ fn file_declutter() -> Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn turn_file_into_folder_same_cache() -> Result<()> {
+    fn setup_origin_1(path_origin: &ChildPath) -> Result<()> {
+        let child = path_origin.child("file");
+        fs::write(&child, "1")?;
+        Ok(())
+    }
+
+    // Turn file into a folder
+    fn setup_origin_2(path_origin: &ChildPath) -> Result<()> {
+        let child = path_origin.child("file");
+        child.create_dir_all()?;
+        fs::write(&child.child("file"), "1")?;
+        Ok(())
+    }
+
+    // Turn folder into a file again
+    fn setup_origin_3(path_origin: &ChildPath) -> Result<()> {
+        let child = path_origin.child("file");
+        fs::write(&child, "1")?;
+        Ok(())
+    }
+
+    fn check_dedup(_path_dedup: &ChildPath) -> Result<()> {
+        Ok(())
+    }
+
+    let cache_file = TempDir::new()?.child("cache.json");
+
+    fixture_with_cache_file(setup_origin_1, check_dedup, cache_file.to_path_buf())?;
+    fixture_with_cache_file(setup_origin_2, check_dedup, cache_file.to_path_buf())?;
+    fixture_with_cache_file(setup_origin_3, check_dedup, cache_file.to_path_buf())?;
+
+    Ok(())
+}

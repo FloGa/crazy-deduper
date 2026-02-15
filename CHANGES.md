@@ -1,3 +1,18 @@
+# Changes in 0.2.1
+
+-   Make sure to only work with regular files
+
+    This solves problems that arised when there were symlinks in the search
+    path, or when a file was scanned in a previous run and afterwards there
+    is a directory with the same path and name. This could have resulted in
+    "unreachable code" errors or random panics.
+
+-   Performance boost due to skipping needless object creations
+
+-   Update dependencies
+
+-   Update base16ct to 1.0.0
+
 # Changes in 0.2.0
 
 -   Open with write permission to set modtime

@@ -527,10 +527,12 @@ impl Deduper {
             cache_path
         };
 
+        let valid_entry = |path: &PathBuf| path.is_file() && !path.is_symlink();
+
         cache = DedupCache::from_hashmap(
             cache
                 .into_iter()
-                .filter(|(path, _)| source_path.join(path).exists())
+                .filter(|(path, _)| valid_entry(&source_path.join(path)))
                 .collect(),
         );
 
@@ -541,7 +543,7 @@ impl Deduper {
         for entry in dir_walker {
             let entry = entry.unwrap().into_path();
 
-            if !entry.is_file() {
+            if !valid_entry(&entry) {
                 continue;
             }
 
