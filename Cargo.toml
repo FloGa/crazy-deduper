@@ -1,6 +1,6 @@
 [package]
 name = "crazy-deduper"
-version = "0.3.0-SNAPSHOT"
+version = "0.2.1-RC"
 edition = "2024"
 
 authors = ["Florian Gamböck <mail@floga.de>"]
