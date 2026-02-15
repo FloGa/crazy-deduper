@@ -1,4 +1,4 @@
-# Changes in 0.2.1-RC
+# Changes in 0.2.1
 
 -   Make sure to only work with regular files
 
