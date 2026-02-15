@@ -1,4 +1,4 @@
-# Changes since latest release
+# Changes in 0.2.1
 
 -   Make sure to only work with regular files
 
@@ -8,6 +8,10 @@
     "unreachable code" errors or random panics.
 
 -   Performance boost due to skipping needless object creations
+
+-   Update dependencies
+
+-   Update base16ct to 1.0.0
 
 # Changes in 0.2.0
 
