@@ -9,6 +9,10 @@
 
 -   Performance boost due to skipping needless object creations
 
+-   Update dependencies
+
+-   Update base16ct to 1.0.0
+
 # Changes in 0.2.0
 
 -   Open with write permission to set modtime
