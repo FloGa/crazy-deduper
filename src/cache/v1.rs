@@ -128,6 +128,10 @@ pub(crate) struct CacheOnDisk<'a> {
     hashing_algorithm: HashingAlgorithm,
 }
 
+fn create_empty_path_node_box<'a>() -> Box<Node<'a>> {
+    Box::new(Node::Path(BTreeMap::new()))
+}
+
 impl<'a> From<v0::CacheOnDisk<'a>> for CacheOnDisk<'a> {
     fn from(value: v0::CacheOnDisk<'a>) -> Self {
         let hashing_algorithm = value
@@ -144,7 +148,7 @@ impl<'a> From<v0::CacheOnDisk<'a>> for CacheOnDisk<'a> {
             for component in path.parent().unwrap().iter() {
                 leaf = if let Node::Path(map) = leaf
                     .entry(component.to_string_lossy().into_owned().into())
-                    .or_insert(Box::new(Node::Path(BTreeMap::new())))
+                    .or_insert_with(create_empty_path_node_box)
                     .as_mut()
                 {
                     map
@@ -227,7 +231,7 @@ impl<'a> From<&'a DedupCache> for CacheOnDisk<'a> {
             for component in path.parent().unwrap().iter() {
                 leaf = if let Node::Path(map) = leaf
                     .entry(component.to_string_lossy().into_owned().into())
-                    .or_insert(Box::new(Node::Path(BTreeMap::new())))
+                    .or_insert_with(create_empty_path_node_box)
                     .as_mut()
                 {
                     map
