@@ -14,7 +14,7 @@ include = ["src/**/*", "LICENSE", "README.md"]
 
 [dependencies]
 anyhow = "1.0.75"
-base16ct = { version = "0.3.0", features = ["alloc"] }
+base16ct = { version = "1.0.0", features = ["alloc"] }
 clap = { version = "4.4.8", features = ["derive"] }
 file-declutter = "0.1.0"
 md-5 = "0.10.6"
